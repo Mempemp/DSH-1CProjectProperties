@@ -164,9 +164,11 @@ function detectPlatforms() {
     join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "1cv8"),
   ];
   if (process.env.LOCALAPPDATA) roots.push(join(process.env.LOCALAPPDATA, "Programs", "1cv8"));
+  // Каталог установки из 1cestart.cfg — на случай нестандартного места.
+  for (const dir of installedLocations()) roots.push(dir);
 
   const found = new Map();
-  for (const root of roots) {
+  for (const root of new Set(roots)) {
     let entries = [];
     try {
       entries = readdirSync(root, { withFileTypes: true });
@@ -182,6 +184,166 @@ function detectPlatforms() {
   return [...found.entries()]
     .map(([version, path]) => ({ version, path }))
     .sort((a, b) => compareVersions(b.version, a.version));
+}
+
+// ── список информационных баз (.v8i) ────────────────────────────────────────
+//
+// Стандартные места: %APPDATA%\1C\1CEStart\ibases.v8i (список пользователя),
+// %PROGRAMDATA%\1C\1CEStart\ibases.v8i (общий список). Файлы 1cestart.cfg и
+// 1cescmn.cfg хранятся в UTF-16LE и могут ссылаться на внешние списки
+// параметром CommonInfoBases — их тоже читаем.
+
+function configFiles() {
+  const roaming = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+  const programData = process.env.ProgramData || process.env.PROGRAMDATA || "C:\\ProgramData";
+  return {
+    roaming,
+    programData,
+    cfgs: [
+      join(roaming, "1C", "1CEStart", "1cestart.cfg"),
+      join(programData, "1C", "1CEStart", "1cestart.cfg"),
+      join(programData, "1C", "1CEStart", "1cescmn.cfg"),
+    ],
+  };
+}
+
+/** Чтение текста 1С: UTF-16LE с BOM, затем UTF-8, затем cp1251. */
+function readTextFile(file) {
+  let raw;
+  try {
+    raw = readFileSync(file);
+  } catch {
+    return "";
+  }
+  if (raw.length >= 2 && raw[0] === 0xff && raw[1] === 0xfe) {
+    try {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(raw.subarray(2));
+    } catch {}
+  }
+  for (const encoding of ["utf-8", "windows-1251"]) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(raw);
+    } catch {}
+  }
+  return raw.toString("utf8");
+}
+
+function expandEnv(value) {
+  return String(value).replace(/%([^%]+)%/g, (match, name) => process.env[name] ?? match);
+}
+
+/** Каталоги установки платформы, объявленные в 1cestart.cfg (InstalledLocation). */
+function installedLocations() {
+  const dirs = [];
+  for (const cfg of configFiles().cfgs) {
+    const text = readTextFile(cfg);
+    const match = text.match(/^\s*InstalledLocation\s*=\s*(.+)$/mi);
+    if (match) dirs.push(expandEnv(match[1].trim()).replace(/[\\/]+$/, ""));
+  }
+  return dirs;
+}
+
+/** Пути внешних списков баз из CommonInfoBases (1cestart.cfg / 1cescmn.cfg). */
+function commonInfoBaseFiles() {
+  const files = [];
+  for (const cfg of configFiles().cfgs) {
+    const text = readTextFile(cfg);
+    const match = text.match(/^\s*CommonInfoBases\s*=\s*(.+)$/mi);
+    if (!match) continue;
+    for (const item of match[1].split(";")) {
+      const value = expandEnv(item.trim().replace(/^"|"$/g, ""));
+      if (value) files.push(value);
+    }
+  }
+  return files;
+}
+
+/** Разбор файла .v8i: секции [Имя] с парами Connect=/ID=/Folder=/App=. */
+function parseV8i(text, source) {
+  const entries = [];
+  let current = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    const section = line.match(/^\[(.+)\]$/);
+    if (section) {
+      if (current) entries.push(current);
+      current = { name: section[1].trim(), connect: "", folder: "", app: "", source };
+      continue;
+    }
+    if (!current) continue;
+    const pair = line.match(/^([A-Za-z]+)\s*=\s*(.*)$/);
+    if (!pair) continue;
+    const key = pair[1].toLowerCase();
+    const value = pair[2].trim();
+    if (key === "connect") current.connect = value;
+    else if (key === "folder") current.folder = value;
+    else if (key === "app") current.app = value;
+  }
+  if (current) entries.push(current);
+  return entries.filter((entry) => entry.name && entry.connect);
+}
+
+/**
+ * Строка соединения из .v8i → значение для поля «Путь к базе».
+ * Файловая база отдаётся путём, клиент-серверная — строкой Srvr/Ref
+ * (обе формы понимает resolveBase). Веб-базы для пакетной выгрузки не годятся.
+ */
+function normalizeConnect(connect) {
+  const value = String(connect || "").trim();
+  const file = value.match(/^file\s*=\s*"?([^";]+)"?;?$/i);
+  if (file) return { value: file[1].trim(), kind: "file" };
+  const server = value.match(/srvr\s*=\s*"?([^";]+)"?/i);
+  const ref = value.match(/\bref\s*=\s*"?([^";]+)"?/i);
+  if (server && ref) {
+    return { value: 'Srvr="' + server[1].trim() + '";Ref="' + ref[1].trim() + '";', kind: "server" };
+  }
+  if (/^\s*ws\s*=/i.test(value)) return { value, kind: "web" };
+  return { value, kind: "unknown" };
+}
+
+/** Сводный список баз: пользовательский, общий и внешние .v8i. */
+function listInfoBases() {
+  const { roaming, programData } = configFiles();
+  const candidates = [
+    { file: join(roaming, "1C", "1CEStart", "ibases.v8i"), source: "список пользователя" },
+    { file: join(programData, "1C", "1CEStart", "ibases.v8i"), source: "общий список" },
+    ...commonInfoBaseFiles().map((file) => ({ file, source: "внешний список" })),
+  ];
+
+  const items = [];
+  const sources = [];
+  const seen = new Set();
+  let webSkipped = 0;
+
+  for (const { file, source } of candidates) {
+    if (!existsSync(file)) continue;
+    const entries = parseV8i(readTextFile(file), source);
+    if (entries.length === 0) continue;
+    sources.push({ file, source, count: entries.length });
+    for (const entry of entries) {
+      const normalized = normalizeConnect(entry.connect);
+      if (normalized.kind === "web") {
+        webSkipped += 1;
+        continue;
+      }
+      if (!normalized.value) continue;
+      const key = normalized.value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        name: entry.name,
+        value: normalized.value,
+        kind: normalized.kind,
+        folder: entry.folder,
+        app: entry.app,
+        source,
+      });
+    }
+  }
+
+  items.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  return { items, webSkipped, sources };
 }
 
 // ── выгрузка конфигурации в файлы (DESIGNER /DumpConfigToFiles) ──────────────
@@ -342,6 +504,14 @@ function jobSnapshot() {
 }
 
 function dumpStatus(_req, res) {
+  // Во время работы число файлов считаем не чаще раза в 5 секунд: обход дерева
+  // из десятков тысяч файлов не должен конкурировать с самой выгрузкой за диск.
+  if (dumpJob && dumpJob.state === "running" && Date.now() - dumpJob.countedAt > 5000) {
+    dumpJob.countedAt = Date.now();
+    try {
+      dumpJob.files = countFiles(dumpJob.dir);
+    } catch {}
+  }
   json(res, 200, { ok: true, job: jobSnapshot() });
 }
 
@@ -437,6 +607,7 @@ async function startDump(ctx, req, res) {
     exitCode: null,
     resultCode: null,
     files: 0,
+    countedAt: 0,
     version: "",
     log: logLines.length > 0 ? logLines.join("\n") + "\n" : "",
     error: "",
@@ -567,6 +738,7 @@ export function apply(ctx) {
     handler: (_req, res) => {
       try {
         const common = readCommon();
+        const infobases = listInfoBases();
         json(res, 200, {
           ok: true,
           paramsRel: PARAMS_REL,
@@ -574,6 +746,9 @@ export function apply(ctx) {
           common,
           projects: listProjects(ctx, common).map((entry) => describeProject(entry, common)),
           platforms: detectPlatforms(),
+          infobases: infobases.items,
+          infobasesWebSkipped: infobases.webSkipped,
+          infobasesSources: infobases.sources,
         });
       } catch (error) {
         json(res, 500, { ok: false, error: error?.message || String(error) });

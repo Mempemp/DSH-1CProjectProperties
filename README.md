@@ -24,6 +24,9 @@
 ### ⤓ Выгрузка конфигурации в файлы
 Кнопка **«Выгрузить конфигурацию в файлы»** запускает Конфигуратор 1С в пакетном режиме (`DESIGNER /DumpConfigToFiles`) и складывает XML прямо в папку проекта — рядом появляются `Configuration.xml`, `ConfigDumpInfo.xml` и каталоги объектов. Доступны формат выгрузки (иерархический/плоский), режим `-update` (только изменившиеся объекты) и снятие lock-файлов `.cfl`. Прогресс, время, число файлов, версия конфигурации и лог Конфигуратора показываются в той же вкладке; выгрузку можно отменить.
 
+### 📚 Подбор базы из списка 1С
+Поле «Путь к базе» подсказывает базы из штатного списка 1С: читаются `%APPDATA%\1C\1CEStart\ibases.v8i` (список пользователя) и `%PROGRAMDATA%\1C\1CEStart\ibases.v8i` (общий список), а также внешние списки, подключённые параметром `CommonInfoBases` в `1cestart.cfg`. Файловые базы подставляются путём к папке, клиент-серверные — строкой `Srvr="…";Ref="…";`; базы через веб-сервер пропускаются (в пакетном режиме к ним не подключиться). Ввод вручную остаётся доступен.
+
 ### 🔌 Роуты `/1cprops/*` для других плагинов и агентов
 Вся работа идёт через хост-роуты, ими же можно пользоваться снаружи: `GET /1cprops/project?path=…` отдаёт действующие параметры проекта с уже подставленным путём к платформе.
 
@@ -57,13 +60,13 @@
 **Из релиза** (скачивать ничего не нужно):
 
 ```sh
-dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/releases/download/v0.2.0/dsh-1c-project-properties-0.2.0.tgz
+dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/releases/download/v0.3.0/dsh-1c-project-properties-0.3.0.tgz
 ```
 
-**Локальный архив** `dsh-1c-project-properties-0.2.0.tgz` (скачан со страницы релизов или собран самому: `cd dsh-1c-project-properties && npm pack`):
+**Локальный архив** `dsh-1c-project-properties-0.3.0.tgz` (скачан со страницы релизов или собран самому: `cd dsh-1c-project-properties && npm pack`):
 
 ```sh
-dsh plugin --profile web add dsh-1c-project-properties-0.2.0.tgz
+dsh plugin --profile web add dsh-1c-project-properties-0.3.0.tgz
 ```
 
 **Папка плагина** (режим разработки, правки в `lib/*.js` подхватываются без переустановки):
@@ -84,7 +87,7 @@ dsh plugin --profile web add <путь к папке>/dsh-1c-project-properties
 | DSH Desktop | `%LOCALAPPDATA%\Programs\DSH Desktop\resources\app\node_modules\@deepseek-ai\dsh\lib\bin.js` |
 
 ```powershell
-node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\dsh-1c-project-properties-0.2.0.tgz"
+node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\dsh-1c-project-properties-0.3.0.tgz"
 ```
 
 ### Возможные сложности
@@ -101,6 +104,7 @@ node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\ds
 | Выгрузка: «Информационная база не обнаружена!» | неверный путь к базе: путь к папке с `1Cv8.1CD` либо строка `Srvr="…";Ref="…";` |
 | Выгрузка мгновенно завершается «успешно», файлов 0 | указан `1cv8s.exe` (серверный агент) — в сессии пользователя он молча ничего не делает. Укажите `1cv8.exe` из того же `bin` |
 | Выгрузка не стартует, если указан только каталог платформы | плагин сам ищет `1cv8.exe` в каталоге и в его `bin` — дайте либо файл, либо папку |
+| В поле «Путь к базе» нет подсказок из списка | плагин читает `%APPDATA%\1C\1CEStart\ibases.v8i` и `%PROGRAMDATA%\1C\1CEStart\ibases.v8i`; если список ведётся в другом файле, подключите его в 1С через «Настройка → Списки общих баз» (попадёт в `CommonInfoBases` файла `1cestart.cfg`, плагин его тоже читает) |
 
 Проверка, что хост-часть поднялась: `curl -s http://127.0.0.1:<порт>/1cprops/state` — должен вернуться JSON со списком проектов.
 
@@ -114,7 +118,7 @@ node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\ds
 
 | Метод и путь | Назначение |
 |---|---|
-| `GET /1cprops/state` | общие настройки, список проектов, найденные платформы 1С |
+| `GET /1cprops/state` | общие настройки, список проектов, найденные платформы 1С, базы из списка 1С (`infobases`) |
 | `POST /1cprops/common` | `{platformPath}` — сохранить общее значение |
 | `POST /1cprops/project-save` | `{path, params}` — записать файл параметров проекта |
 | `GET /1cprops/project?path=…` | действующие параметры проекта (общий путь к платформе подставлен) |

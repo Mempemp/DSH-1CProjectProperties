@@ -12,6 +12,7 @@ window.__ModuleLoader__.load({
 
     const API = "/1cprops";
     const PLATFORM_LIST_ID = "dsh-1cprops-platforms";
+    const INFOBASE_LIST_ID = "dsh-1cprops-infobases";
 
     async function request(path, init) {
       const response = await fetch(API + path, {
@@ -272,7 +273,17 @@ window.__ModuleLoader__.load({
 
       const projects = state.projects || [];
       const platforms = state.platforms || [];
+      const infoBases = state.infobases || [];
       const platformPlaceholder = state.common.platformPath || "(не задано в общих настройках)";
+      const infoBaseHint = (() => {
+        const parts = [
+          infoBases.length
+            ? "Из списка баз 1С подставлено: " + infoBases.length + " — начните вводить имя базы или выберите из списка."
+            : "Список баз 1С (ibases.v8i) не найден — путь вводится вручную.",
+        ];
+        if (state.infobasesWebSkipped) parts.push("Базы через веб-сервер пропущены: " + state.infobasesWebSkipped + ".");
+        return parts.join(" ");
+      })();
 
       const statusLine = status
         ? jsx("div", {
@@ -385,11 +396,15 @@ window.__ModuleLoader__.load({
               jsx("div", { style: styles.fieldLabel, children: "Путь к базе" }),
               jsx("input", {
                 style: styles.input,
+                list: INFOBASE_LIST_ID,
                 value: form.infobasePath,
                 placeholder: "C:\\Базы\\Бухгалтерия  либо  Srvr=\"server\";Ref=\"buh\";",
                 onChange: (e) => setForm((f) => ({ ...f, infobasePath: e.target.value })),
               }),
-              jsx("div", { style: styles.hint, children: "Папка файловой базы или строка соединения с сервером 1С. Хранится как есть, без проверки." }),
+              jsxs("div", { style: styles.hint, children: [
+                "Папка файловой базы или строка соединения с сервером 1С. Хранится как есть, без проверки.",
+                jsx("div", { children: infoBaseHint }),
+              ]}),
             ]}),
             jsxs("div", { style: { display: "flex", gap: 12 }, children: [
               jsxs("div", { style: { flex: "1 1 0", minWidth: 0, marginBottom: 12 }, children: [
@@ -522,6 +537,7 @@ window.__ModuleLoader__.load({
           jsx("div", { style: { flex: "1 1 auto", minWidth: 0 }, children: projectCard }),
         ]}),
         jsx("datalist", { id: PLATFORM_LIST_ID, children: platforms.map((p) => jsx("option", { key: p.path, value: p.path, children: p.version })) }),
+        jsx("datalist", { id: INFOBASE_LIST_ID, children: infoBases.map((b) => jsx("option", { key: b.value, value: b.value, children: b.name })) }),
       ]});
     }
 
