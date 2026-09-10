@@ -7,6 +7,7 @@
 // Список проектов = реестр воркспейсов DSH + дополнительные пути, добавленные вручную.
 // Все роуты живут под префиксом /1cprops и отдают JSON.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -22,7 +23,7 @@ const PARAMS_FILE = "1c-project.json";
 const PARAMS_REL = PARAMS_DIR + "/" + PARAMS_FILE;
 
 // Порядок ключей в файле проекта (и полный список поддерживаемых полей).
-const PARAM_KEYS = ["infobasePath", "user", "password", "platformPath"];
+const PARAM_KEYS = ["infobasePath", "user", "password", "platformPath", "unlockCode", "dumpDir"];
 
 // $DSH_HOME: та же приоритетность, что у ядра — переменная окружения, иначе ~/.dsh.
 const DSH_HOME = (() => {
@@ -181,6 +182,332 @@ function detectPlatforms() {
   return [...found.entries()]
     .map(([version, path]) => ({ version, path }))
     .sort((a, b) => compareVersions(b.version, a.version));
+}
+
+// ── выгрузка конфигурации в файлы (DESIGNER /DumpConfigToFiles) ──────────────
+//
+// Проверено на 8.3.27.2130 (Windows, интерактивная сессия пользователя):
+//   • работает 1cv8.exe; 1cv8s.exe в этой среде молча завершается с кодом 0 и ничего не делает;
+//   • stale-локи .cfl в каталоге файловой базы ломают выгрузку
+//     («Ошибка блокировки информационной базы для конфигурирования»);
+//   • /DumpResult<файл> пишет 0 при успехе и 1 при ошибке — надёжнее кода возврата;
+//   • каталог выгрузки и подключаемые параметры передаются отдельными аргументами,
+//     без кавычек (spawn без shell).
+
+const DUMP_TIMEOUT_MS = 60 * 60 * 1000;
+const JOB_TAIL_CHARS = 4000;
+
+/** Один активный процесс выгрузки на весь плагин (1С блокирует конфигурацию базы). */
+let dumpJob = null;
+
+/** Путь к платформе → конкретный exe и рабочий каталог. Принимает и .exe, и папку bin. */
+function resolvePlatform(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return { error: "не задан путь к платформе 1С — заполните его в проекте или в общих настройках" };
+  let stat = null;
+  try {
+    stat = statSync(value);
+  } catch {
+    return { error: "путь к платформе не найден: " + value };
+  }
+  if (stat.isFile()) return { exe: value, cwd: dirname(value) };
+  if (!stat.isDirectory()) return { error: "путь к платформе не файл и не каталог: " + value };
+
+  // Приоритет: 1cv8.exe (полный клиент, работает в сессии пользователя), затем серверный
+  // агент и тонкий клиент — у них набор пакетных команд уже.
+  for (const dir of [value, join(value, "bin")]) {
+    for (const name of ["1cv8.exe", "1cv8s.exe", "1cv8c.exe"]) {
+      const candidate = join(dir, name);
+      if (existsSync(candidate)) return { exe: candidate, cwd: dir };
+    }
+  }
+  return { error: "в каталоге нет 1cv8.exe: " + value };
+}
+
+/** Путь к базе (или строка соединения) → аргумент /F или /S. */
+function resolveBase(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return { error: "не задан путь к базе" };
+  if (!/(^|;)\s*(Srvr|Ref|File|IBName)\s*=/i.test(value)) return { arg: "/F" + value };
+
+  const pick = (key) => {
+    const match = value.match(new RegExp("(?:^|;)\\s*" + key + "\\s*=\\s*\"?([^\";]+)\"?", "i"));
+    return match ? match[1].trim() : "";
+  };
+  const file = pick("File");
+  if (file) return { arg: "/F" + file };
+  const server = pick("Srvr");
+  const ref = pick("Ref");
+  if (server && ref) return { arg: "/S" + server + "\\" + ref };
+  return { error: "в строке соединения нет File либо Srvr/Ref: " + value };
+}
+
+/** Каталог выгрузки: пусто → корень проекта, относительный путь → внутри проекта. */
+function resolveDumpDir(projectPath, raw) {
+  const value = String(raw || "").trim();
+  if (!value) return projectPath;
+  return canonical(isAbsolute(value) ? value : join(projectPath, value));
+}
+
+/** Снять stale-локи .cfl файловой базы (без них выгрузка падает на блокировке). */
+function cleanLockFiles(dir) {
+  const removed = [];
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.toLowerCase().endsWith(".cfl")) {
+        try {
+          unlinkSync(join(dir, name));
+          removed.push(name);
+        } catch {}
+      }
+    }
+  } catch {}
+  return removed;
+}
+
+/** Конфигуратор пишет /Out в cp1251 на русской Windows, но может и в UTF-8. */
+function decodeLog(file) {
+  let raw;
+  try {
+    raw = readFileSync(file);
+  } catch {
+    return "";
+  }
+  for (const encoding of ["utf-8", "windows-1251"]) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(raw);
+    } catch {}
+  }
+  return raw.toString("utf8");
+}
+
+function countFiles(dir, cap = 200000) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length > 0 && total < cap) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(join(current, entry.name));
+      else if (entry.isFile()) total += 1;
+    }
+  }
+  return total;
+}
+
+/** Первая содержательная строка лога — чтобы причина ошибки была видна без раскрытия лога. */
+function firstLogLine(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) || "";
+}
+
+/** Версия конфигурации — только из <Version> в Configuration.xml (не из ConfigDumpInfo.xml). */
+function readConfigVersion(dir) {
+  try {
+    const raw = readFileSync(join(dir, "Configuration.xml"));
+    if (raw.length > 20 * 1024 * 1024) return "";
+    const match = raw.toString("utf8").match(/<Version>([^<]+)<\/Version>/);
+    return match ? match[1].trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function jobSnapshot() {
+  if (!dumpJob) return { state: "idle" };
+  const finished = dumpJob.finishedAt ?? Date.now();
+  return {
+    state: dumpJob.state,
+    path: dumpJob.path,
+    title: dumpJob.title,
+    dir: dumpJob.dir,
+    startedAt: dumpJob.startedAt,
+    finishedAt: dumpJob.finishedAt ?? null,
+    elapsedMs: finished - dumpJob.startedAt,
+    command: dumpJob.command,
+    exitCode: dumpJob.exitCode,
+    resultCode: dumpJob.resultCode,
+    files: dumpJob.files,
+    version: dumpJob.version,
+    log: dumpJob.log,
+    error: dumpJob.error,
+  };
+}
+
+function dumpStatus(_req, res) {
+  json(res, 200, { ok: true, job: jobSnapshot() });
+}
+
+function cancelDump(_req, res) {
+  if (!dumpJob || dumpJob.state !== "running" || !dumpJob.child) {
+    return json(res, 200, { ok: true, job: jobSnapshot() });
+  }
+  try {
+    spawnSync("taskkill", ["/PID", String(dumpJob.child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  } catch {}
+  dumpJob.state = "cancelled";
+  dumpJob.finishedAt = Date.now();
+  dumpJob.error = "выгрузка отменена";
+  json(res, 200, { ok: true, job: jobSnapshot() });
+}
+
+async function startDump(ctx, req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)) || "{}");
+  } catch (error) {
+    return json(res, 400, { ok: false, error: error?.message || String(error) });
+  }
+
+  const projectPath = canonical(String(body?.path ?? "").trim());
+  if (!isDirectory(projectPath)) return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+  if (dumpJob && dumpJob.state === "running") {
+    return json(res, 409, { ok: false, error: "уже идёт выгрузка проекта «" + dumpJob.title + "» — дождитесь её окончания" });
+  }
+
+  const common = readCommon();
+  const params = readParams(projectPath).params;
+  const platform = resolvePlatform(params.platformPath || common.platformPath);
+  if (platform.error) return json(res, 400, { ok: false, error: platform.error });
+  const base = resolveBase(params.infobasePath);
+  if (base.error) return json(res, 400, { ok: false, error: base.error });
+
+  const format = body?.format === "Plain" ? "Plain" : "Hierarchical";
+  const dir = resolveDumpDir(projectPath, body?.dir ?? params.dumpDir);
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    return json(res, 400, { ok: false, error: "не удалось создать каталог выгрузки: " + (error?.message || error) });
+  }
+
+  // -update работает только при наличии файла версий в каталоге выгрузки: без него
+  // Конфигуратор падает с ошибкой (в отличие от несовпадения версии формата,
+  // которое закрывает -force). Нет файла — делаем полную выгрузку и пишем об этом.
+  const notes = [];
+  let update = body?.update === true;
+  if (update && !existsSync(join(dir, "ConfigDumpInfo.xml"))) {
+    update = false;
+    notes.push("в каталоге выгрузки нет ConfigDumpInfo.xml — выполнена полная выгрузка, а не обновление");
+  }
+
+  // Снятие локов — только для файловой базы, заданной путём (не строкой соединения).
+  let removedLocks = [];
+  if (body?.cleanLocks === true && base.arg.startsWith("/F")) removedLocks = cleanLockFiles(base.arg.slice(2));
+
+  const jobDir = join(DSH_HOME, "1c-project-properties", "jobs");
+  mkdirSync(jobDir, { recursive: true });
+  const stamp = String(Date.now());
+  const logFile = join(jobDir, "dump-" + stamp + ".log");
+  const resultFile = join(jobDir, "dump-" + stamp + ".result");
+
+  const args = [
+    "DESIGNER",
+    base.arg,
+    ...(params.user ? ["/N" + params.user] : []),
+    ...(params.password ? ["/P" + params.password] : []),
+    ...(params.unlockCode ? ["/UC" + params.unlockCode] : []),
+    "/DumpConfigToFiles", dir,
+    "-Format", format,
+    ...(update ? ["-update", "-force"] : []),
+    "/Out" + logFile,
+    "/DumpResult" + resultFile,
+    "/DisableStartupDialogs",
+    "/DisableStartupMessages",
+  ];
+
+  const title = basename(projectPath);
+  const logLines = [];
+  if (removedLocks.length > 0) logLines.push("сняты lock-файлы: " + removedLocks.join(", "));
+  logLines.push(...notes);
+  const job = {
+    state: "running",
+    path: projectPath,
+    title,
+    dir,
+    startedAt: Date.now(),
+    finishedAt: null,
+    command: [platform.exe, ...args.map((a, i) => (i > 0 && ["/P", "/N"].some((k) => a.startsWith(k)) ? a.slice(0, 3) + "…" : a))].join(" "),
+    exitCode: null,
+    resultCode: null,
+    files: 0,
+    version: "",
+    log: logLines.length > 0 ? logLines.join("\n") + "\n" : "",
+    error: "",
+    child: null,
+  };
+  dumpJob = job;
+
+  let child;
+  try {
+    child = spawn(platform.exe, args, { cwd: platform.cwd, windowsHide: true, stdio: "ignore" });
+  } catch (error) {
+    job.state = "failed";
+    job.finishedAt = Date.now();
+    job.error = "не удалось запустить " + platform.exe + ": " + (error?.message || error);
+    return json(res, 500, { ok: false, job: jobSnapshot() });
+  }
+  job.child = child;
+
+  const timer = setTimeout(() => {
+    if (job.state !== "running") return;
+    try {
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {}
+    job.state = "failed";
+    job.finishedAt = Date.now();
+    job.error = "выгрузка превысила лимит " + Math.round(DUMP_TIMEOUT_MS / 60000) + " мин и была остановлена";
+    job.log = (job.log + "\n" + decodeLog(logFile)).slice(-JOB_TAIL_CHARS);
+  }, DUMP_TIMEOUT_MS);
+
+  const finalize = () => {
+    clearTimeout(timer);
+    if (job.state === "cancelled") return;
+    job.finishedAt = Date.now();
+    job.exitCode = child.exitCode;
+    const text = decodeLog(logFile);
+    job.log = (job.log + (text ? "\n" + text : "")).slice(-JOB_TAIL_CHARS);
+    job.resultCode = decodeLog(resultFile).trim();
+    job.files = countFiles(dir);
+
+    // 1C пишет /Out и /DumpResult асинхронно — даём файлам дописаться.
+    if (!job.resultCode && job.files === 0) {
+      setTimeout(() => {
+        job.resultCode = decodeLog(resultFile).trim();
+        job.files = countFiles(dir);
+        job.state = job.resultCode === "0" || job.files > 0 ? "done" : "failed";
+        if (job.state === "failed") job.error = "выгрузка не создала файлов" + (job.exitCode ? " (код " + job.exitCode + ")" : "");
+        else job.version = readConfigVersion(dir);
+      }, 3000);
+      return;
+    }
+
+    if (job.resultCode === "0" || (job.files > 0 && job.exitCode === 0)) {
+      job.state = "done";
+      job.version = readConfigVersion(dir);
+      return;
+    }
+    job.state = "failed";
+    job.error = job.resultCode === "1"
+      ? "Конфигуратор сообщил об ошибке: " + (firstLogLine(text) || "см. лог")
+      : "выгрузка не создала файлов" + (job.exitCode ? " (код " + job.exitCode + ")" : "");
+  };
+
+  child.on("exit", finalize);
+  child.on("error", (error) => {
+    job.state = "failed";
+    job.finishedAt = Date.now();
+    job.error = "процесс 1С: " + (error?.message || error);
+    clearTimeout(timer);
+  });
+
+  json(res, 202, { ok: true, job: jobSnapshot() });
 }
 
 // ── сборка списка проектов ──────────────────────────────────────────────────
@@ -375,5 +702,28 @@ export function apply(ctx) {
         json(res, 400, { ok: false, error: error?.message || String(error) });
       }
     },
+  });
+
+  // ── выгрузка конфигурации в файлы ────────────────────────────────────────
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/dump-start",
+    handler: (req, res) => {
+      startDump(ctx, req, res);
+    },
+  });
+  ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-status", handler: dumpStatus });
+  ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-cancel", handler: cancelDump });
+
+  // Уходя, не оставляем висящий Конфигуратор.
+  ctx.on("dispose", () => {
+    if (dumpJob?.state === "running" && dumpJob.child) {
+      try {
+        spawnSync("taskkill", ["/PID", String(dumpJob.child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      } catch {}
+      dumpJob.state = "cancelled";
+      dumpJob.finishedAt = Date.now();
+    }
   });
 }

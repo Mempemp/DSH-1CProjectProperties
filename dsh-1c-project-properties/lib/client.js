@@ -119,7 +119,9 @@ window.__ModuleLoader__.load({
       },
     };
 
-    const EMPTY_FORM = { infobasePath: "", user: "", password: "", platformPath: "" };
+    const EMPTY_FORM = { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" };
+
+    const EMPTY_RUN = { format: "Hierarchical", update: false, cleanLocks: false };
 
     function Section() {
       const [state, setState] = useState(null);
@@ -130,6 +132,8 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = useState(null);
       const [busy, setBusy] = useState(false);
       const [newPath, setNewPath] = useState("");
+      const [job, setJob] = useState(null);
+      const [runOptions, setRunOptions] = useState(EMPTY_RUN);
 
       const load = useCallback(async () => {
         try {
@@ -158,6 +162,8 @@ window.__ModuleLoader__.load({
           user: project.params.user || "",
           password: project.params.password || "",
           platformPath: project.params.platformPath || "",
+          unlockCode: project.params.unlockCode || "",
+          dumpDir: project.params.dumpDir || "",
         });
         setShowPassword(false);
       }, [state, selected]);
@@ -219,6 +225,47 @@ window.__ModuleLoader__.load({
         }, "Проект добавлен в список");
       };
 
+      // ── выгрузка конфигурации в файлы ──────────────────────────────────────
+      const refreshJob = useCallback(async () => {
+        try {
+          const data = await request("/dump-status");
+          setJob(data.job);
+        } catch {}
+      }, []);
+
+      useEffect(() => {
+        refreshJob();
+      }, [refreshJob]);
+
+      useEffect(() => {
+        if (!job || job.state !== "running") return;
+        const timer = setInterval(refreshJob, 2000);
+        return () => clearInterval(timer);
+      }, [job && job.state, refreshJob]);
+
+      const startDump = () => {
+        if (!project) return;
+        run(async () => {
+          const data = await request("/dump-start", {
+            method: "POST",
+            body: JSON.stringify({
+              path: project.path,
+              dir: form.dumpDir,
+              format: runOptions.format,
+              update: runOptions.update,
+              cleanLocks: runOptions.cleanLocks,
+            }),
+          });
+          setJob(data.job);
+        }, "Выгрузка запущена");
+      };
+
+      const cancelDump = () =>
+        run(async () => {
+          const data = await request("/dump-cancel", { method: "POST", body: JSON.stringify({ path: project ? project.path : "" }) });
+          setJob(data.job);
+        }, "Выгрузка отменена");
+
       if (state === null) {
         return jsx("div", { style: { opacity: 0.7 }, children: status ? status.text : "Загрузка параметров…" });
       }
@@ -233,6 +280,96 @@ window.__ModuleLoader__.load({
             children: status.text,
           })
         : null;
+
+      // ── панель выгрузки конфигурации ───────────────────────────────────────
+      const running = Boolean(job && job.state === "running");
+      const canRun = Boolean(project && project.params.infobasePath);
+      const option = (label, key) =>
+        jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }, children: [
+          jsx("input", {
+            type: "checkbox",
+            checked: runOptions[key],
+            disabled: running,
+            onChange: (e) => setRunOptions((o) => ({ ...o, [key]: e.target.checked })),
+          }),
+          label,
+        ] });
+      const jobLine = job && job.state !== "idle"
+        ? jsxs("div", { style: { fontSize: 12, lineHeight: 1.6 }, children: [
+            jsx("span", {
+              style: { fontWeight: 600, color: job.state === "done" ? "#4caf50" : job.state === "running" ? "inherit" : "#e57373" },
+              children: job.state === "running" ? "идёт выгрузка…" : job.state === "done" ? "выгрузка завершена" : job.state === "cancelled" ? "выгрузка отменена" : "выгрузка не удалась",
+            }),
+            jsx("span", { style: { opacity: 0.7 }, children: " · «" + job.title + "» · " + Math.round((job.elapsedMs || 0) / 1000) + " с" }),
+            job.files ? jsx("span", { style: { opacity: 0.7 }, children: " · файлов: " + job.files }) : null,
+            job.version ? jsx("span", { style: { opacity: 0.7 }, children: " · версия конфигурации: " + job.version }) : null,
+            jsx("div", { style: { opacity: 0.7, wordBreak: "break-all" }, children: "каталог: " + job.dir }),
+            job.error ? jsx("div", { style: { color: "#e57373" }, children: job.error }) : null,
+          ]})
+        : null;
+      const jobLog = job && job.log && job.state !== "running"
+        ? jsx("pre", {
+            style: {
+              margin: 0,
+              maxHeight: 200,
+              overflow: "auto",
+              padding: 8,
+              borderRadius: 8,
+              background: "rgba(127,127,127,0.08)",
+              fontSize: 11,
+              lineHeight: 1.45,
+              whiteSpace: "pre-wrap",
+            },
+            children: job.log,
+          })
+        : null;
+      const dumpPanel = jsxs("div", {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          marginTop: 4,
+          paddingTop: 12,
+          borderTop: "1px solid var(--dsw-alias-border-l2)",
+        },
+        children: [
+          jsx("div", { style: { fontSize: 12, fontWeight: 600 }, children: "Выгрузка конфигурации в файлы" }),
+          jsxs("div", { style: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }, children: [
+            jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 }, children: [
+              "Формат:",
+              jsxs("select", {
+                value: runOptions.format,
+                disabled: running,
+                onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
+                style: {
+                  height: 26,
+                  borderRadius: 6,
+                  border: "1px solid var(--dsw-alias-border-l2)",
+                  background: "var(--dsw-alias-bg-base)",
+                  color: "inherit",
+                  font: "var(--dsw-font-s-14)",
+                },
+                children: [
+                  jsx("option", { value: "Hierarchical", children: "иерархический" }),
+                  jsx("option", { value: "Plain", children: "плоский" }),
+                ],
+              }),
+            ]}),
+            option("только изменения (-update)", "update"),
+            option("снять .cfl перед выгрузкой", "cleanLocks"),
+          ]}),
+          jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }, children: [
+            running
+              ? jsx("button", { type: "button", style: styles.dangerButton, disabled: busy, onClick: cancelDump, children: "Отменить выгрузку" })
+              : jsx("button", { type: "button", style: styles.primaryButton, disabled: busy || !canRun, onClick: startDump, children: "Выгрузить конфигурацию в файлы" }),
+            !project ? null : !project.params.infobasePath
+              ? jsx("span", { style: styles.hint, children: "Сначала заполните путь к базе и нажмите «Сохранить»." })
+              : jsx("span", { style: { opacity: 0.55, fontSize: 11 }, children: "Конфигуратор блокирует конфигурацию базы — выгрузка идёт в один поток." }),
+          ]}),
+          jobLine,
+          jobLog,
+        ],
+      });
 
       const projectCard = !project
         ? jsx("div", { style: styles.hint, children: "Выберите проект в списке слева." })
@@ -296,6 +433,28 @@ window.__ModuleLoader__.load({
                 ? "Путь задан для этого проекта."
                 : "Пусто — будет использован путь из общих настроек: " + (state.common.platformPath || "не задан") }),
             ]}),
+            jsxs("div", { style: { display: "flex", gap: 12 }, children: [
+              jsxs("div", { style: { flex: "1 1 0", minWidth: 0, marginBottom: 12 }, children: [
+                jsx("div", { style: styles.fieldLabel, children: "Код доступа к базе (/UC)" }),
+                jsx("input", {
+                  style: styles.input,
+                  value: form.unlockCode,
+                  placeholder: "(пусто = без кода)",
+                  onChange: (e) => setForm((f) => ({ ...f, unlockCode: e.target.value })),
+                }),
+                jsx("div", { style: styles.hint, children: "Нужен, если на базе стоит блокировка установки соединений с кодом доступа." }),
+              ]}),
+              jsxs("div", { style: { flex: "1 1 0", minWidth: 0, marginBottom: 12 }, children: [
+                jsx("div", { style: styles.fieldLabel, children: "Каталог выгрузки" }),
+                jsx("input", {
+                  style: styles.input,
+                  value: form.dumpDir,
+                  placeholder: "пусто = корень проекта",
+                  onChange: (e) => setForm((f) => ({ ...f, dumpDir: e.target.value })),
+                }),
+                jsx("div", { style: styles.hint, children: "Абсолютный путь или путь внутри проекта — куда писать XML." }),
+              ]}),
+            ]}),
             jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center" }, children: [
               jsx("button", { type: "button", style: styles.primaryButton, disabled: busy, onClick: saveProject, children: "Сохранить" }),
               jsx("button", { type: "button", style: styles.dangerButton, disabled: busy || !project.hasFile, onClick: clearProject, children: "Удалить файл" }),
@@ -304,6 +463,7 @@ window.__ModuleLoader__.load({
                 : null,
               jsx("span", { style: { opacity: 0.55, fontSize: 11 }, children: "Пароль хранится в открытом виде — не коммитьте файл в git." }),
             ]}),
+            dumpPanel,
           ]});
 
       return jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16, maxWidth: 900 }, children: [
