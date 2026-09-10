@@ -51,6 +51,14 @@ dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/
 
 Затем перезапустите `dsh web` и обновите вкладку браузера.
 
+> `dsh plugin add` принимает npm-спецификацию: файл `.tgz`, ссылку на релиз, имя пакета из npm или папку плагина. Отдельного «установщика для Windows» нет и не нужно: `.tgz` — обычный npm-архив (tar + gzip) из JS и JSON, одинаковый на всех платформах.
+
+> Если `dsh` не в PATH (локальная установка, например в `D:\DSH`) — вызывайте его полным путём:
+> ```powershell
+> & "D:\DSH\node_modules\.bin\dsh.cmd" plugin --profile web add "D:\путь\к\dsh-1c-project-properties-0.1.0.tgz"
+> ```
+> либо один раз добавьте `D:\DSH\node_modules\.bin` в `PATH`.
+
 > Если pnpm сообщает об ошибке стора (`ERR_PNPM_UNEXPECTED_STORE`) — добавьте `--store-dir="<путь к вашему pnpm store>"` к команде установки.
 
 > Путь с пробелами в команде установки ломается на `.cmd`-шиме pnpm: если архив или папка плагина лежат в каталоге с пробелами, установите через junction без пробелов в имени.

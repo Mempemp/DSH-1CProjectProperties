@@ -62,6 +62,12 @@ dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/
 На Windows-профиле с нестандартным pnpm-store команда может потребовать
 `--store-dir="<путь к стору>"` (dsh передаёт аргументы pnpm дословно).
 
+Если `dsh` не в PATH (локальная установка, например в `D:\DSH`), вызывайте его полным путём:
+
+```powershell
+& "D:\DSH\node_modules\.bin\dsh.cmd" plugin --profile web add "D:\путь\к\dsh-1c-project-properties-0.1.0.tgz"
+```
+
 После установки: перезапустить `dsh web` (хост-половина) и обновить страницу в браузере
 (клиентская половина). Проверка:
 
