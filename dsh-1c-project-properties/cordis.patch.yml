@@ -1,0 +1,4 @@
+# dsh-1c-project-properties bundle patch: подключает плагин в композицию профиля.
+- insert:
+    - id: 1c-project-properties
+      name: 'dsh-1c-project-properties'

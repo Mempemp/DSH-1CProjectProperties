@@ -1,0 +1,15 @@
+# Dependencies / build output
+node_modules/
+
+# Logs
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# npm pack artifacts (архивы уезжают в релиз, в репозиторий не коммитятся)
+*.tgz
+
+# локальные данные плагина
+.dsh/
