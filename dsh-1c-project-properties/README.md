@@ -2,7 +2,7 @@
 
 Плагин DeepSeek Harness: **параметры 1С в разрезе проекта**.
 
-Добавляет в настройки DSH вкладку **«1С: параметры»**: сверху — общие значения для машины, ниже — список проектов и форма параметров выбранного проекта. Значения проекта лежат в его собственной папке, в файле `.dsh/1c-project.json`, поэтому переезжают вместе с проектом, видны в git и доступны другим инструментам (плагинам, агентам, скриптам).
+Добавляет в настройки DSH вкладку **«1С: Параметры проектов»**: общие значения для машины и список проектов. Параметры конкретного проекта открываются в отдельном окне — по клику на проект или по шестерёнке у строки. Значения проекта лежат в его собственной папке, в файле `.dsh/1c-project.json`, поэтому переезжают вместе с проектом, видны в git и доступны другим инструментам (плагинам, агентам, скриптам).
 
 Там же — кнопка **«Выгрузить конфигурацию в файлы»**: запускает Конфигуратор 1С в пакетном режиме и складывает XML прямо в папку проекта. Поле «Путь к базе» подсказывает базы из штатного списка 1С (`ibases.v8i`).
 
@@ -25,7 +25,7 @@
 
 ## Использование
 
-1. **Settings → «1С: параметры»**.
+1. **Settings → «1С: Параметры проектов»**.
 2. В блоке «Общие» — путь к платформе по умолчанию.
 3. Выберите проект слева (или добавьте путь вручную).
 4. Заполните путь к базе, пользователя, пароль → **«Сохранить»**.
@@ -90,10 +90,10 @@
 
 ```sh
 # из публичного релиза
-dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/releases/download/v0.3.0/dsh-1c-project-properties-0.3.0.tgz
+dsh plugin --profile web add https://github.com/Mempemp/DSH-1CProjectProperties/releases/download/v0.4.0/dsh-1c-project-properties-0.4.0.tgz
 
 # из локального архива
-dsh plugin --profile web add ./dsh-1c-project-properties-0.3.0.tgz
+dsh plugin --profile web add ./dsh-1c-project-properties-0.4.0.tgz
 
 # из папки плагина (режим разработки, правки применяются без переустановки)
 dsh plugin --profile web add <путь к папке>/dsh-1c-project-properties
@@ -104,7 +104,7 @@ dsh plugin --profile web add <путь к папке>/dsh-1c-project-properties
 Если `dsh` не в PATH (локальная установка, DSH Desktop), вызывайте точку входа через node:
 
 ```powershell
-node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\dsh-1c-project-properties-0.3.0.tgz"
+node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\dsh-1c-project-properties-0.4.0.tgz"
 ```
 
 Частые сложности:
@@ -140,7 +140,7 @@ node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\ds
 package.json          dsh.bundle.patch → cordis.patch.yml; dsh.client → lib/client.js
 cordis.patch.yml      одна строка insert: монтирует плагин в композицию профиля
 lib/index.js          хост: роуты /1cprops/*, JSON проектов, платформы 1С, список баз .v8i, запуск Конфигуратора
-lib/client.js         браузер: секция settings.section («1С: параметры»)
+lib/client.js         браузер: секция settings.section («1С: Параметры проектов»)
 ```
 
 Хост-половина — ESM с `export { name, inject, apply }`, `inject = ["webServer", "workspaceRegistry"]`. Клиентская — модуль для `window.__ModuleLoader__` с `factory(require)` и `return { apply, inject: ["slots"] }`. Внешних зависимостей нет: только `node:*` и React из рантайма DSH.
