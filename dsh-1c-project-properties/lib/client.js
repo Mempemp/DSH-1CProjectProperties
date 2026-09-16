@@ -32,6 +32,8 @@ window.__ModuleLoader__.load({
     const API = "/1cprops";
     const PLATFORM_LIST_ID = "dsh-1cprops-platforms";
     const INFOBASE_LIST_ID = "dsh-1cprops-infobases";
+    // Набор, который раскладывает кнопка «Развернуть» — ссылка в заголовке карточки.
+    const RULES_REPO = "https://github.com/comol/ai_rules_1c";
 
     async function request(path, init) {
       const response = await fetch(API + path, {
@@ -67,6 +69,10 @@ window.__ModuleLoader__.load({
   --p1c-danger: #e57373;
   --p1c-warn: #e0a030;
   --p1c-ok: #4caf50;
+  /* Колонка с шагом: без неё блоки вкладки липнут друг к другу (у секции
+     настроек нет собственного gap). */
+  display: flex; flex-direction: column; gap: 14px; min-width: 0;
+  font-family: var(--dsw-font-family, inherit);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -90,10 +96,13 @@ window.__ModuleLoader__.load({
 .p1c-input, .p1c-select {
   width: 100%; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
   border: 1px solid var(--p1c-border); background: var(--p1c-field-bg); color: inherit;
-  font: var(--dsw-font-s-14, 400 14px/1.4 inherit);
+  /* Не шорткат font: с неразрешённой переменной он отбрасывается целиком, и
+     контрол падает в шрифт UA — самый заметный симптом «чужого» селекта. */
+  font-family: var(--dsw-font-family, inherit);
+  font-size: 13px; font-weight: 400; line-height: 1.45;
 }
 .p1c-select { padding-right: 6px; cursor: pointer; }
-.p1c-select--format { width: 170px; height: 30px; }
+.p1c-field--format { max-width: 260px; }
 .p1c-input::placeholder { color: inherit; opacity: .38; }
 .p1c-input:focus, .p1c-select:focus {
   outline: none;
@@ -112,7 +121,8 @@ window.__ModuleLoader__.load({
 .p1c-btn {
   height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid transparent;
   background: transparent; color: inherit; cursor: pointer; white-space: nowrap;
-  font: var(--dsw-font-s-14, 400 14px/1.4 inherit);
+  font-family: var(--dsw-font-family, inherit);
+  font-size: 13px; font-weight: 500; line-height: 1.45;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   transition: background-color .12s ease, border-color .12s ease, filter .12s ease, opacity .12s ease;
 }
@@ -150,7 +160,6 @@ window.__ModuleLoader__.load({
 .p1c-project__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .p1c-project__name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p1c-project__path { font-size: 11px; opacity: .5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p1c-badge { flex: 0 0 auto; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--p1c-border); opacity: .85; }
 .p1c-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .45; }
 .p1c-dot--ok { background: var(--p1c-ok); opacity: 1; }
 .p1c-dot--warn { background: var(--p1c-warn); opacity: 1; }
@@ -161,6 +170,8 @@ window.__ModuleLoader__.load({
 .p1c-text--warn { color: var(--p1c-warn); }
 .p1c-text--err { color: var(--p1c-danger); }
 .p1c-chevron { flex: 0 0 auto; opacity: .35; display: flex; }
+.p1c-link { color: var(--p1c-primary); text-decoration: none; }
+.p1c-link:hover { text-decoration: underline; }
 
 .p1c-overlay { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .p1c-mask { position: absolute; inset: 0; background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,.5)); }
@@ -192,8 +203,6 @@ window.__ModuleLoader__.load({
 
 .p1c-status { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; }
 .p1c-status__dot { flex: 0 0 auto; margin-top: 6px; }
-.p1c-kv { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
-.p1c-kv > span { white-space: nowrap; }
 .p1c-log {
   margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 8px;
   background: rgba(0,0,0,.28); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -203,6 +212,19 @@ window.__ModuleLoader__.load({
 .p1c-note--warn { color: var(--p1c-warn); opacity: 1; }
 .p1c-note--err { color: var(--p1c-danger); opacity: 1; }
 .p1c-note--ok { color: var(--p1c-ok); opacity: 1; }
+/* Состояние операции — отдельным боксом: в общем содержимом карточки оно
+   сливалось с подписями и читалось как одна строка. */
+.p1c-job {
+  border: 1px solid var(--p1c-border); border-radius: 10px;
+  background: rgba(127,127,127,.07); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.p1c-job__head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.p1c-job__state { font-size: 12.5px; font-weight: 600; }
+.p1c-job__op { font-size: 11.5px; opacity: .62; }
+.p1c-job__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 3px 14px; font-size: 12px; }
+.p1c-job__key { opacity: .55; }
+.p1c-job__dir { font-size: 11.5px; opacity: .62; word-break: break-all; }
 .p1c-stack { display: flex; flex-direction: column; gap: 14px; }
 .p1c-stack--tight { gap: 6px; }
 `;
@@ -313,6 +335,56 @@ window.__ModuleLoader__.load({
         ],
       });
 
+    /**
+     * Состояние операции Конфигуратора отдельным боксом: состояние, тип операции,
+     * метрики сеткой, каталог и (для провала) причина. Кнопки передаются снаружи —
+     * в окне проекта рядом стоят кнопки запуска, на главной вкладке — «Открыть»/«Отменить».
+     */
+    function JobBox(props) {
+      const { job } = props;
+      const metrics = [
+        props.showProject && job.title ? ["Проект", job.title] : null,
+        ["Время", Math.round((job.elapsedMs || 0) / 1000) + " с"],
+        job.counts && job.files ? ["Файлов", String(job.files)] : null,
+        job.version ? ["Версия", job.version] : null,
+      ].filter(Boolean);
+      return jsxs("div", {
+        className: "p1c-job",
+        children: [
+          jsxs("div", {
+            className: "p1c-job__head",
+            children: [
+              jsx(Dot, { tone: JOB_TONE[job.state] || undefined }),
+              jsx("span", {
+                className: cx("p1c-job__state", JOB_TONE[job.state] && "p1c-text--" + JOB_TONE[job.state]),
+                children: JOB_TITLE[job.state] || job.state,
+              }),
+              job.label ? jsx("span", { className: "p1c-job__op", children: job.label }) : null,
+            ],
+          }),
+          metrics.length
+            ? jsx("div", {
+                className: "p1c-job__grid",
+                children: metrics.map(([key, value]) =>
+                  jsxs("div", {
+                    key: key,
+                    children: [
+                      jsx("span", { className: "p1c-job__key", children: key + ": " }),
+                      jsx("span", { children: value }),
+                    ],
+                  }),
+                ),
+              })
+            : null,
+          job.dir ? jsx("div", { className: "p1c-job__dir p1c-mono", children: job.dir }) : null,
+          job.state === "failed" && job.error
+            ? jsx("div", { className: "p1c-note p1c-note--err", children: job.error })
+            : null,
+          props.actions ? jsx("div", { className: "p1c-actions", children: props.actions }) : null,
+        ],
+      });
+    }
+
     const CloseIcon = () =>
       jsxs("svg", {
         width: 15,
@@ -344,11 +416,20 @@ window.__ModuleLoader__.load({
       removed: "удалено",
     };
 
-    const JOB_LABEL = {
-      running: "идёт операция",
-      done: "операция завершена",
-      failed: "операция не удалась",
-      cancelled: "операция отменена",
+    /** Подписи строки-итога в отчёте развёртывания (читаются как «записано файлов: 102»). */
+    const RESULT_LABEL = {
+      written: "записано файлов",
+      unchanged: "без изменений",
+      preserved: "сохранено ваших",
+      removed: "удалено",
+    };
+
+    /** Заголовок бокса операции: с большой буквы, читается как состояние. */
+    const JOB_TITLE = {
+      running: "Операция идёт",
+      done: "Операция завершена",
+      failed: "Операция не удалась",
+      cancelled: "Операция отменена",
     };
 
     const JOB_TONE = { running: null, done: "ok", failed: "err", cancelled: "err" };
@@ -367,17 +448,17 @@ window.__ModuleLoader__.load({
         loadOptions,
         setLoadOptions,
         job,
+        opError,
         busy,
         infoBaseHint,
         platformPlaceholder,
         infoBases,
         platforms,
-        rulesInfo,
+        rulesPayload,
         rulesResult,
         rulesOptions,
         setRulesOptions,
         onRulesDeploy,
-        onRulesRemove,
         onSave,
         onClear,
         onForget,
@@ -413,31 +494,7 @@ window.__ModuleLoader__.load({
         ? jsxs("div", {
             className: "p1c-stack p1c-stack--tight",
             children: [
-              jsxs("div", {
-                className: "p1c-status",
-                children: [
-                  jsx(Dot, { className: "p1c-status__dot", tone: JOB_TONE[job.state] || undefined }),
-                  jsxs("div", {
-                    children: [
-                      jsx("div", {
-                        className: cx("p1c-strong", JOB_TONE[job.state] && "p1c-text--" + JOB_TONE[job.state]),
-                        children: JOB_LABEL[job.state] || job.state,
-                      }),
-                      jsx("div", {
-                        className: "p1c-kv p1c-note",
-                        children: [
-                          job.label ? jsx("span", { children: job.label }) : null,
-                          jsx("span", { children: Math.round((job.elapsedMs || 0) / 1000) + " с" }),
-                          job.counts && job.files ? jsx("span", { children: "файлов: " + job.files }) : null,
-                          job.version ? jsx("span", { children: "версия: " + job.version }) : null,
-                        ].filter(Boolean),
-                      }),
-                      jsx("div", { className: "p1c-note p1c-mono", children: job.dir }),
-                      job.error ? jsx("div", { className: "p1c-note p1c-note--err", children: job.error }) : null,
-                    ],
-                  }),
-                ],
-              }),
+              jsx(JobBox, { job }),
               job.log && job.state !== "running"
                 ? jsxs("details", {
                     className: "p1c-details",
@@ -452,39 +509,12 @@ window.__ModuleLoader__.load({
         : null;
 
       // ── блок правил 1С ─────────────────────────────────────────────────────
-      const rulesDeploy = rulesInfo && rulesInfo.deploy ? rulesInfo.deploy : null;
-      const rulesPayload = rulesInfo && rulesInfo.payload ? rulesInfo.payload : null;
-      const rulesDeployed = Boolean(rulesDeploy && rulesDeploy.deployed);
-      const rulesDriftCount = rulesDeployed && rulesDeploy.modified
-        ? rulesDeploy.modified.length + (rulesDeploy.missing || []).length
-        : 0;
-      const rulesStatus = (() => {
-        if (!rulesInfo) return { text: "Проверяю состояние…", tone: null };
-        if (rulesInfo.error) return { text: String(rulesInfo.error), tone: "err" };
-        if (rulesPayload && rulesPayload.ok === false) {
-          return { text: "Набор правил не найден в DSH — обновите приложение.", tone: "warn" };
-        }
-        if (!rulesDeployed) {
-          return {
-            text: "Правила в проект не развёрнуты.",
-            detail: "Сейчас работают только общие навыки из DSH — их ссылки на правила и роли не разрешаются.",
-            tone: null,
-          };
-        }
-        const parts = ["Развёрнуто: " + (rulesDeploy.version || "версия неизвестна")];
-        if (rulesDeploy.counts) parts.push("файлов: " + rulesDeploy.counts.files);
-        if (rulesDeploy.deployedAt) parts.push(new Date(rulesDeploy.deployedAt).toLocaleString("ru-RU"));
-        if (rulesDeploy.stalePayload) parts.push("в DSH лежит более новый набор — обновите");
-        return {
-          text: parts.join(" · "),
-          tone: rulesDriftCount > 0 || rulesDeploy.stalePayload ? "warn" : "ok",
-        };
-      })();
-
+      const rulesPayloadOk = Boolean(rulesPayload && rulesPayload.ok);
+      const rulesPayloadRoot = rulesPayload && rulesPayload.root ? rulesPayload.root : "$DSH_HOME/1c-rules";
       const rulesResultSummary = rulesResult && rulesResult.summary
-        ? Object.entries(rulesResult.summary)
-            .filter(([, value]) => value > 0)
-            .map(([key, value]) => (STATUS_LABEL[key] || key) + ": " + value)
+        ? Object.entries(RESULT_LABEL)
+            .filter(([key]) => Number(rulesResult.summary[key]) > 0)
+            .map(([key, label]) => label + ": " + rulesResult.summary[key])
             .join(" · ")
         : "";
 
@@ -493,10 +523,17 @@ window.__ModuleLoader__.load({
             className: "p1c-stack p1c-stack--tight",
             children: [
               jsx("div", {
-                className: "p1c-sm p1c-strong",
-                children: rulesResult.dryRun ? "Предпросмотр (ничего не записано)" : "Готово",
+                className: cx("p1c-sm p1c-strong", rulesResult.ok === false && "p1c-text--err"),
+                children: rulesResult.ok === false
+                  ? "Развернуть не удалось"
+                  : rulesResult.dryRun ? "Предпросмотр (ничего не записано)" : "Развёртывание выполнено",
               }),
-              jsx("div", { className: "p1c-note", children: rulesResultSummary || "изменений нет" }),
+              rulesResult.ok === false
+                ? jsx("div", {
+                    className: "p1c-note p1c-note--err",
+                    children: String(rulesResult.error || "причина не сообщена"),
+                  })
+                : jsx("div", { className: "p1c-note", children: rulesResultSummary || "изменений нет" }),
               ...(rulesResult.notes || []).map((note, index) =>
                 jsx("div", { key: "n" + index, className: "p1c-note", children: note }),
               ),
@@ -659,24 +696,25 @@ window.__ModuleLoader__.load({
                       className: "p1c-stack",
                       children: [
                         jsxs("div", {
-                          className: "p1c-options",
+                          className: "p1c-field p1c-field--format",
                           children: [
-                            jsxs("label", {
-                              className: "p1c-check-row",
+                            jsx("label", { className: "p1c-label", htmlFor: "p1c-dump-format", children: "Формат выгрузки" }),
+                            jsxs("select", {
+                              id: "p1c-dump-format",
+                              className: "p1c-select",
+                              value: runOptions.format,
+                              disabled: running && jobIsHere,
+                              onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
                               children: [
-                                jsx("span", { className: "p1c-label", children: "Формат" }),
-                                jsxs("select", {
-                                  className: "p1c-select p1c-select--format",
-                                  value: runOptions.format,
-                                  disabled: running && jobIsHere,
-                                  onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
-                                  children: [
-                                    jsx("option", { value: "Hierarchical", children: "иерархический" }),
-                                    jsx("option", { value: "Plain", children: "плоский" }),
-                                  ],
-                                }),
+                                jsx("option", { value: "Hierarchical", children: "иерархический" }),
+                                jsx("option", { value: "Plain", children: "плоский" }),
                               ],
                             }),
+                          ],
+                        }),
+                        jsxs("div", {
+                          className: "p1c-options",
+                          children: [
                             jsx(Check, {
                               checked: runOptions.update,
                               disabled: running && jobIsHere,
@@ -723,10 +761,18 @@ window.__ModuleLoader__.load({
                               children: "Выгрузить расширения",
                             }),
                             !canRun
-                              ? jsx("span", { className: "p1c-note", children: "Сначала укажите путь к базе и нажмите «Сохранить»." })
+                              ? jsx("span", {
+                                  className: "p1c-note",
+                                  children: form.infobasePath
+                                    ? "Путь к базе введён, но не сохранён — нажмите «Сохранить»."
+                                    : "Сначала укажите путь к базе и нажмите «Сохранить».",
+                                })
                               : null,
                           ],
                         }),
+                        opError
+                          ? jsx("div", { className: "p1c-note p1c-note--err", children: opError })
+                          : null,
                         jsxs("div", {
                           className: "p1c-stack p1c-stack--tight",
                           children: [
@@ -771,65 +817,35 @@ window.__ModuleLoader__.load({
 
                   jsx(Card, {
                     title: "Правила 1С в проекте",
+                    hint: jsxs("span", {
+                      children: [
+                        "Набор ",
+                        jsx("a", { className: "p1c-link", href: RULES_REPO, target: "_blank", rel: "noreferrer", children: "1c-rules" }),
+                        " раскладывается в проект: .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, .dsh/skills и AGENTS.md в корне.",
+                      ],
+                    }),
                     children: jsxs("div", {
                       className: "p1c-stack",
                       children: [
-                        jsxs("div", {
-                          className: "p1c-status",
-                          children: [
-                            jsx(Dot, { className: "p1c-status__dot", tone: rulesStatus.tone || undefined }),
-                            jsxs("div", {
-                              children: [
-                                jsx("div", {
-                                  className: rulesStatus.tone ? "p1c-text--" + rulesStatus.tone : undefined,
-                                  children: rulesStatus.text,
-                                }),
-                                rulesStatus.detail
-                                  ? jsx("div", { className: "p1c-note", children: rulesStatus.detail })
-                                  : null,
-                              ],
-                            }),
-                          ],
-                        }),
-                        rulesDriftCount > 0
-                          ? jsx("div", {
+                        rulesPayloadOk
+                          ? null
+                          : jsx("div", {
                               className: "p1c-note p1c-note--warn",
-                              children: "Файлов с вашими правками или удалённых: " + rulesDriftCount +
-                                " — они не перезаписываются и останутся при удалении правил.",
-                            })
-                          : null,
-                        jsxs("div", {
-                          className: "p1c-actions",
-                          children: [
-                            jsx(Btn, {
-                              variant: "primary",
-                              disabled: busy || (rulesPayload && rulesPayload.ok === false),
-                              onClick: () => onRulesDeploy(false),
-                              children: rulesDeployed ? "Обновить правила" : "Развернуть правила",
+                              children: "Набор «1c-rules» в DSH не найден: " + rulesPayloadRoot +
+                                ". Его кладёт DSH Desktop при первом запуске; в standalone-установке положите набор в этот каталог вручную.",
                             }),
-                            jsx(Btn, {
-                              disabled: busy,
-                              title: "Прогнать развёртывание «вхолостую»: плагин посчитает, что будет записано, сохранено и удалено, но ничего не тронет на диске",
-                              onClick: () => onRulesDeploy(true),
-                              children: "Проверить без записи",
-                            }),
-                            rulesDeployed
-                              ? jsx(Btn, { variant: "danger", disabled: busy, onClick: onRulesRemove, children: "Убрать правила" })
-                              : null,
-                          ],
-                        }),
                         jsxs("div", {
                           className: "p1c-options",
                           children: [
                             jsx(Check, {
                               checked: rulesOptions.useEdt,
-                              disabled: busy,
+                              disabled: busy || !rulesPayloadOk,
                               onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
                               children: "в проекте используется 1С:EDT",
                             }),
                             jsx(Check, {
                               checked: rulesOptions.includePassword,
-                              disabled: busy,
+                              disabled: busy || !rulesPayloadOk,
                               title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
                               onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
                               children: "записать пароль базы в .dev.env",
@@ -837,10 +853,21 @@ window.__ModuleLoader__.load({
                           ],
                         }),
                         jsx("div", {
+                          className: "p1c-actions",
+                          children: jsx(Btn, {
+                            variant: "primary",
+                            disabled: busy || !rulesPayloadOk,
+                            title: rulesPayloadOk
+                              ? "Разложить набор правил в проект: .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, .dsh/skills, AGENTS.md"
+                              : "Набор правил не найден в DSH: " + rulesPayloadRoot,
+                            onClick: () => onRulesDeploy(false),
+                            children: "Развернуть",
+                          }),
+                        }),
+                        jsx("div", {
                           className: "p1c-note",
-                          children: "Разворачивается весь набор: 48 правил, 13 ролей, 30 сценариев, навыки, OpenSpec и точка входа " +
-                            "AGENTS.md. Ссылки content/rules/… переписываются на проектные пути; существующий AGENTS.md сохраняется " +
-                            "как AGENTS.md.bak.md и вклеивается в USER-RULES.md, а .dev.env и openspec/ не перезаписываются.",
+                          children: "Существующий AGENTS.md не затирается: он сохраняется как AGENTS.md.bak.md и вклеивается в USER-RULES.md; " +
+                            "файлы с вашими правками при обновлении не перезаписываются, .dev.env и openspec/ создаются один раз.",
                         }),
                         rulesResultBlock
                           ? jsxs("details", {
@@ -902,9 +929,9 @@ window.__ModuleLoader__.load({
       const [job, setJob] = useState(null);
       const [runOptions, setRunOptions] = useState(EMPTY_RUN);
       const [loadOptions, setLoadOptions] = useState(EMPTY_LOAD);
-      const [rulesInfo, setRulesInfo] = useState(null);
       const [rulesResult, setRulesResult] = useState(null);
       const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
+      const [opError, setOpError] = useState(null);
 
       injectStyles();
 
@@ -952,6 +979,12 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false);
         }
+      };
+
+      /** Отказ операции Конфигуратора показываем в карточке, а не только в строке статуса. */
+      const recordOpError = (error) => {
+        setOpError(String((error && error.message) || error));
+        throw error;
       };
 
       const saveCommon = () =>
@@ -1018,6 +1051,7 @@ window.__ModuleLoader__.load({
 
       const startDump = () => {
         if (!project) return;
+        setOpError(null);
         run(async () => {
           const data = await request("/dump-start", {
             method: "POST",
@@ -1028,7 +1062,7 @@ window.__ModuleLoader__.load({
               update: runOptions.update,
               cleanLocks: runOptions.cleanLocks,
             }),
-          });
+          }).catch(recordOpError);
           setJob(data.job);
         }, "Выгрузка запущена");
       };
@@ -1054,6 +1088,7 @@ window.__ModuleLoader__.load({
               : "ВНИМАНИЕ: нединамическое обновление требует выхода всех пользователей из базы.")
             : "Конфигурация базы обновляться не будет.");
         if (typeof window !== "undefined" && !window.confirm(question)) return;
+        setOpError(null);
         run(async () => {
           const data = await request("/load-start", {
             method: "POST",
@@ -1065,7 +1100,7 @@ window.__ModuleLoader__.load({
               dynamic: loadOptions.dynamic,
               cleanLocks: runOptions.cleanLocks,
             }),
-          });
+          }).catch(recordOpError);
           setJob(data.job);
         }, "Загрузка запущена");
       };
@@ -1081,61 +1116,37 @@ window.__ModuleLoader__.load({
           "Конфигуратор выполнит /DumpConfigToFiles с ключом -AllExtensions. " +
           "Существующие исходники расширений в этом каталоге будут перезаписаны.";
         if (typeof window !== "undefined" && !window.confirm(question)) return;
+        setOpError(null);
         run(async () => {
           const data = await request("/extensions-start", {
             method: "POST",
             body: JSON.stringify({ path: project.path, dir: form.dumpDir, cleanLocks: runOptions.cleanLocks }),
-          });
+          }).catch(recordOpError);
           setJob(data.job);
         }, "Выгрузка расширений запущена");
       };
 
       // ── правила 1С в проекте ───────────────────────────────────────────────
-      const loadRules = useCallback(async (path) => {
-        if (!path) {
-          setRulesInfo(null);
-          return;
-        }
-        try {
-          const data = await request("/rules-status?path=" + encodeURIComponent(path));
-          setRulesInfo(data);
-        } catch (error) {
-          setRulesInfo({ error: String((error && error.message) || error) });
-        }
-      }, []);
-
       useEffect(() => {
         setRulesResult(null);
-        loadRules(openPath);
-      }, [openPath, loadRules]);
+      }, [openPath]);
 
-      const deployRulesTo = (dryRun) =>
+      const deployRulesTo = () =>
         run(async () => {
           const body = {
             path: project.path,
             includePassword: rulesOptions.includePassword,
             useEdt: rulesOptions.useEdt,
-            dryRun,
           };
-          const data = await request("/rules-deploy", { method: "POST", body: JSON.stringify(body) });
-          setRulesResult(data);
-          if (!dryRun) await loadRules(project.path);
-        }, dryRun ? "Проверка выполнена — ничего не записано" : "Правила развёрнуты в проект");
-
-      const removeRulesFrom = () => {
-        if (!project) return;
-        const question =
-          "Убрать развёрнутые правила из проекта «" + project.title + "»?\n\n" +
-          "Будут удалены AGENTS.md (точка входа), .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, " +
-          ".dsh/skills и openspec/. Файлы с вашими правками останутся, USER-RULES.md, memory.md " +
-          "и LLM-RULES.md тоже сохраняются; прежний AGENTS.md вернётся из AGENTS.md.bak.md.";
-        if (typeof window !== "undefined" && !window.confirm(question)) return;
-        run(async () => {
-          const data = await request("/rules-remove", { method: "POST", body: JSON.stringify({ path: project.path }) });
-          setRulesResult(data);
-          await loadRules(project.path);
-        }, "Правила убраны из проекта");
-      };
+          try {
+            setRulesResult(await request("/rules-deploy", { method: "POST", body: JSON.stringify(body) }));
+          } catch (error) {
+            // Отказ хоста (нет набора, нет прав) — это результат операции, а не
+            // молчание: показываем его в карточке правил.
+            setRulesResult({ ok: false, error: String((error && error.message) || error) });
+            throw error;
+          }
+        }, "Правила развёрнуты в проект");
 
       if (state === null) {
         return jsx("div", { className: "p1c-root", children: jsx("div", { className: "p1c-note", children: status ? status.text : "Загрузка параметров…" }) });
@@ -1148,10 +1159,10 @@ window.__ModuleLoader__.load({
       const infoBaseHint = (() => {
         const parts = [
           infoBases.length
-            ? "Из списка баз 1С подставлено: " + infoBases.length + "."
+            ? "Найдено баз 1С: " + infoBases.length + " — поле подсказывает их при вводе."
             : "Список баз 1С (ibases.v8i) не найден — путь вводится вручную.",
         ];
-        if (state.infobasesWebSkipped) parts.push("Базы через веб-сервер пропущены: " + state.infobasesWebSkipped + ".");
+        if (state.infobasesWebSkipped) parts.push("Через веб-сервер пропущено баз: " + state.infobasesWebSkipped + ".");
         return parts.join(" ");
       })();
 
@@ -1169,33 +1180,17 @@ window.__ModuleLoader__.load({
         : null;
 
       const jobStrip = job && job.state !== "idle"
-        ? jsxs(Card, {
-            children: jsxs("div", {
-              className: "p1c-actions",
-              children: [
-                jsx(Dot, { tone: JOB_TONE[job.state] || undefined }),
-                jsxs("div", {
-                  className: "p1c-actions__grow",
-                  children: [
-                    jsx("div", {
-                      className: cx("p1c-sm p1c-strong", JOB_TONE[job.state] && "p1c-text--" + JOB_TONE[job.state]),
-                      children: (JOB_LABEL[job.state] || job.state) + (job.label ? " · " + job.label : ""),
-                    }),
-                    jsx("div", {
-                      className: "p1c-note",
-                      children: "«" + job.title + "» · " + Math.round((job.elapsedMs || 0) / 1000) + " с" +
-                        (job.counts && job.files ? " · файлов: " + job.files : ""),
-                    }),
-                  ],
-                }),
-                state.projects.some((p) => p.path === job.path)
-                  ? jsx(Btn, { onClick: () => setOpenPath(job.path), children: "Открыть" })
-                  : null,
-                job.state === "running"
-                  ? jsx(Btn, { variant: "danger", disabled: busy, onClick: cancelDump, children: "Отменить" })
-                  : null,
-              ],
-            }),
+        ? jsx(JobBox, {
+            job,
+            showProject: true,
+            actions: [
+              state.projects.some((p) => p.path === job.path)
+                ? jsx(Btn, { key: "open", onClick: () => setOpenPath(job.path), children: "Открыть" })
+                : null,
+              job.state === "running"
+                ? jsx(Btn, { key: "cancel", variant: "danger", disabled: busy, onClick: cancelDump, children: "Отменить" })
+                : null,
+            ].filter(Boolean),
           })
         : null;
 
@@ -1212,17 +1207,17 @@ window.__ModuleLoader__.load({
             loadOptions,
             setLoadOptions,
             job,
+            opError,
             busy,
             infoBaseHint,
             platformPlaceholder,
             infoBases,
             platforms,
-            rulesInfo,
+            rulesPayload: state.rulesPayload || null,
             rulesResult,
             rulesOptions,
             setRulesOptions,
             onRulesDeploy: deployRulesTo,
-            onRulesRemove: removeRulesFrom,
             onSave: saveProject,
             onClear: clearProject,
             onForget: forgetProject,
@@ -1313,13 +1308,6 @@ window.__ModuleLoader__.load({
                                 jsx("span", { className: "p1c-project__path p1c-mono", children: p.path }),
                               ],
                             }),
-                            p.rules && p.rules.deployed
-                              ? jsx("span", {
-                                  className: "p1c-badge",
-                                  title: "Правила 1С развёрнуты: " + (p.rules.version || "версия неизвестна") + ", файлов: " + p.rules.files,
-                                  children: "правила",
-                                })
-                              : null,
                             jsx(Dot, {
                               title: p.hasFile ? "Файл параметров есть" : "Файл параметров ещё не создан",
                               tone: p.hasFile ? "ok" : undefined,

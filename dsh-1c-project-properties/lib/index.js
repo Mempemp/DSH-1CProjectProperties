@@ -14,10 +14,6 @@ import {
   deployRules,
   readPayload,
   removeRules,
-  rulesStatus,
-  rulesSummary,
-  SECTIONS,
-  SECTION_LABELS,
 } from "./rules-deploy.js";
 
 export const name = "dsh-1c-project-properties";
@@ -897,11 +893,26 @@ function describeProject(entry, common) {
     params: info.params,
     effectivePlatformPath: platformPath || common.platformPath,
     platformFromCommon: platformPath === "",
-    rules: isDirectory(entry.path) ? rulesSummary(entry.path) : { deployed: false },
   };
 }
 
 // ── плагин ──────────────────────────────────────────────────────────────────
+
+/**
+ * Наличие набора правил в DSH — единственное, что плагин о нём знает. Ни версии
+ * развёрнутого набора, ни дрейфа правок в проекте он не считает: карточка правил
+ * только блокирует кнопку и объясняет, чего не хватает.
+ */
+function describePayload() {
+  const payload = readPayload(DSH_HOME);
+  return {
+    ok: payload.ok,
+    root: payload.root,
+    error: payload.ok ? undefined : payload.error,
+    version: payload.ok ? payload.manifest?.version ?? "" : "",
+    derived: payload.ok ? payload.derived === true : false,
+  };
+}
 
 export function apply(ctx) {
   ctx.webServer.register({
@@ -921,6 +932,7 @@ export function apply(ctx) {
           infobases: infobases.items,
           infobasesWebSkipped: infobases.webSkipped,
           infobasesSources: infobases.sources,
+          rulesPayload: describePayload(),
         });
       } catch (error) {
         json(res, 500, { ok: false, error: error?.message || String(error) });
@@ -1087,38 +1099,6 @@ export function apply(ctx) {
   // навыков и <проект>/AGENTS.md как всегда включённый контекст. Ссылки правил
   // на content/... при этом переписываются на проектные пути — без этого они
   // указывают в никуда. Подробности контракта — lib/rules-deploy.js.
-
-  ctx.webServer.register({
-    kind: "exact",
-    path: ROUTE + "/rules-status",
-    handler: (req, res) => {
-      try {
-        const target = new URL(req.url, "http://127.0.0.1").searchParams.get("path");
-        if (!target) return json(res, 400, { ok: false, error: "параметр path обязателен" });
-        const projectPath = canonical(target);
-        if (!isDirectory(projectPath)) {
-          return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
-        }
-        const payload = readPayload(DSH_HOME);
-        json(res, 200, {
-          ok: true,
-          payload: payload.ok
-            ? {
-                ok: true,
-                root: payload.root,
-                version: payload.manifest.version || "",
-                digest: payload.manifest.digest || "",
-                derived: payload.derived === true,
-              }
-            : { ok: false, root: payload.root, error: payload.error },
-          deploy: rulesStatus({ dshHome: DSH_HOME, projectPath }),
-          sections: SECTIONS.map((id) => ({ id, label: SECTION_LABELS[id] })),
-        });
-      } catch (error) {
-        json(res, 500, { ok: false, error: error?.message || String(error) });
-      }
-    },
-  });
 
   ctx.webServer.register({
     kind: "exact",

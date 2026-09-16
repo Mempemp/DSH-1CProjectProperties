@@ -200,7 +200,7 @@ export function readPayload(dshHome) {
   if (!manifest || typeof manifest !== "object") {
     // Дерево на месте, а манифеста нет: набор скопирован вручную или посеян
     // старой версией. Раскладывать его всё равно можно — версия просто
-    // неизвестна, и об этом честно сообщается.
+    // неизвестна; версии плагин не отслеживает, поэтому это не предупреждение.
     return {
       ok: true,
       root,
@@ -208,10 +208,6 @@ export function readPayload(dshHome) {
       contentDir,
       derived: true,
       manifest: { id: PAYLOAD_DIR, version: "", digest: "", seededAt: "", derived: true },
-      warning:
-        "у набора правил нет " +
-        manifestFile +
-        " — версия неизвестна; развёртывание возможно, но обновлять набор нужно целиком",
     };
   }
   return { ok: true, root, manifestFile, manifest, contentDir };
@@ -666,7 +662,6 @@ export function deployRules(options) {
   const tracked = previous?.byPath ?? new Map();
   if (force) tracked.clear();
   const journal = new Journal(dryRun);
-  if (payload.warning !== undefined) journal.warn(payload.warning);
   /** targetRel → { digest, binary } для манифеста следующего запуска. */
   const nextFiles = new Map();
   const { root, manifest, contentDir } = payload;
@@ -776,7 +771,7 @@ export function deployRules(options) {
     );
     record(ENVIRONMENT_REL, result.digest);
     if (journal.counts.written > 0) {
-      journal.note("правила ссылаются на " + ENVIRONMENT_REL + " — там фактические MCP-серверы и механика DSH");
+      journal.note("Сгенерирован " + ENVIRONMENT_REL + " — описание окружения DSH, на него ссылаются правила");
     }
   }
 
