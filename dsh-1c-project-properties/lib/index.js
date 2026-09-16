@@ -10,6 +10,15 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  deployRules,
+  readPayload,
+  removeRules,
+  rulesStatus,
+  rulesSummary,
+  SECTIONS,
+  SECTION_LABELS,
+} from "./rules-deploy.js";
 
 export const name = "dsh-1c-project-properties";
 
@@ -359,7 +368,22 @@ function listInfoBases() {
 const DUMP_TIMEOUT_MS = 60 * 60 * 1000;
 const JOB_TAIL_CHARS = 4000;
 
-/** Один активный процесс выгрузки на весь плагин (1С блокирует конфигурацию базы). */
+/**
+ * Пакетные операции Конфигуратора. Одна за раз: 1С блокирует конфигурацию базы,
+ * поэтому параллельный запуск всё равно упадёт на блокировке.
+ *
+ * `producesFiles` различает операции по тому, чем подтверждается успех: выгрузка
+ * обязана создать файлы (код возврата 0 при пустом каталоге — ложный успех,
+ * проверено на 8.3.27), а загрузка файлов не создаёт и подтверждается только
+ * /DumpResult.
+ */
+const OPERATIONS = {
+  dump: { label: "выгрузка конфигурации", producesFiles: true },
+  load: { label: "загрузка конфигурации из файлов", producesFiles: false },
+  extensions: { label: "выгрузка расширений", producesFiles: true },
+};
+
+/** Один активный процесс на весь плагин (1С блокирует конфигурацию базы). */
 let dumpJob = null;
 
 /** Путь к платформе → конкретный exe и рабочий каталог. Принимает и .exe, и папку bin. */
@@ -487,6 +511,8 @@ function jobSnapshot() {
   const finished = dumpJob.finishedAt ?? Date.now();
   return {
     state: dumpJob.state,
+    operation: dumpJob.operation,
+    label: dumpJob.label,
     path: dumpJob.path,
     title: dumpJob.title,
     dir: dumpJob.dir,
@@ -497,6 +523,7 @@ function jobSnapshot() {
     exitCode: dumpJob.exitCode,
     resultCode: dumpJob.resultCode,
     files: dumpJob.files,
+    counts: dumpJob.counts,
     version: dumpJob.version,
     log: dumpJob.log,
     error: dumpJob.error,
@@ -506,7 +533,7 @@ function jobSnapshot() {
 function dumpStatus(_req, res) {
   // Во время работы число файлов считаем не чаще раза в 5 секунд: обход дерева
   // из десятков тысяч файлов не должен конкурировать с самой выгрузкой за диск.
-  if (dumpJob && dumpJob.state === "running" && Date.now() - dumpJob.countedAt > 5000) {
+  if (dumpJob && dumpJob.state === "running" && dumpJob.counts && Date.now() - dumpJob.countedAt > 5000) {
     dumpJob.countedAt = Date.now();
     try {
       dumpJob.files = countFiles(dumpJob.dir);
@@ -524,11 +551,102 @@ function cancelDump(_req, res) {
   } catch {}
   dumpJob.state = "cancelled";
   dumpJob.finishedAt = Date.now();
-  dumpJob.error = "выгрузка отменена";
+  dumpJob.error = (dumpJob.label || "операция") + " отменена";
   json(res, 200, { ok: true, job: jobSnapshot() });
 }
 
-async function startDump(ctx, req, res) {
+/**
+ * Аргументы пакетного запуска Конфигуратора. Чистая функция — её проверяет
+ * test/rules-deploy.smoke.mjs, потому что неверный ключ платформа молча
+ * игнорирует, и операция «проходит успешно», ничего не сделав.
+ *
+ * Кавычки не расставляются: spawn запускается без shell, аргументы уходят
+ * позиционно, и лишние кавычки внутри значения 1С понимает буквально.
+ */
+export function buildDesignerArgs(options) {
+  const {
+    operation,
+    baseArg,
+    params = {},
+    format = "Hierarchical",
+    sourceDir,
+    targetDir,
+    update = false,
+    updateDb = true,
+    dynamic = true,
+    logFile,
+    resultFile,
+  } = options;
+
+  const args = [
+    "DESIGNER",
+    baseArg,
+    ...(params.user ? ["/N" + params.user] : []),
+    ...(params.password ? ["/P" + params.password] : []),
+    ...(params.unlockCode ? ["/UC" + params.unlockCode] : []),
+  ];
+  const notes = [];
+
+  if (operation === "dump") {
+    args.push(
+      "/DumpConfigToFiles", targetDir,
+      "-Format", format,
+      ...(update ? ["-update", "-force"] : []),
+    );
+  } else if (operation === "extensions") {
+    // Отдельный каталог обязателен: -AllExtensions в общем каталоге смешал бы
+    // объекты расширений с объектами основной конфигурации.
+    args.push("/DumpConfigToFiles", targetDir, "-Format", "Hierarchical", "-AllExtensions");
+    notes.push("выгружаются все расширения базы в " + targetDir);
+  } else if (operation === "load") {
+    args.push("/LoadConfigFromFiles", sourceDir, "-Format", format);
+    notes.push("источник: " + sourceDir);
+    if (updateDb) {
+      args.push("/UpdateDBCfg");
+      if (dynamic) {
+        args.push("-Dynamic+", "-SessionTerminate", "force");
+        notes.push("конфигурация базы обновляется динамически (-Dynamic+, сеансы не прерываются)");
+      } else {
+        notes.push("обновление базы без динамики — нужны монопольный доступ и выход всех пользователей");
+      }
+    } else {
+      notes.push("конфигурация базы не обновляется — изменения останутся только в конфигурации");
+    }
+  } else {
+    throw new Error("неизвестная операция: " + operation);
+  }
+
+  args.push(
+    "/Out" + logFile,
+    "/DumpResult" + resultFile,
+    "/DisableStartupDialogs",
+    "/DisableStartupMessages",
+  );
+  return { args, notes };
+}
+
+/**
+ * Подсказка к ошибке операции. Для расширений она важна: ключ -AllExtensions у
+ * /DumpConfigToFiles подтверждён не всеми источниками, и молчаливое «не вышло»
+ * здесь читается как неисправность плагина, а не как ограничение версии.
+ */
+function failureHint(operation) {
+  if (operation !== "extensions") return "";
+  return " Если эта версия платформы не знает ключ -AllExtensions у /DumpConfigToFiles," +
+    " выгрузка расширений в исходники ею не поддерживается — команда для ручной проверки есть в README.";
+}
+
+/**
+ * Запуск пакетной операции Конфигуратора. Три команды, одни и те же /F|/S, /N,
+ * /P, /UC, /Out, /DumpResult:
+ *   выгрузка   — /DumpConfigToFiles <каталог> -Format <формат> [-update -force]
+ *   загрузка   — /LoadConfigFromFiles <каталог> -Format <формат> [/UpdateDBCfg]
+ *   расширения — /DumpConfigToFiles <каталог>\Extensions -Format Hierarchical -AllExtensions
+ */
+async function startDesignerJob(operation, req, res) {
+  const spec = OPERATIONS[operation];
+  if (!spec) return json(res, 400, { ok: false, error: "неизвестная операция: " + operation });
+
   let body;
   try {
     body = JSON.parse((await readBody(req)) || "{}");
@@ -539,7 +657,10 @@ async function startDump(ctx, req, res) {
   const projectPath = canonical(String(body?.path ?? "").trim());
   if (!isDirectory(projectPath)) return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
   if (dumpJob && dumpJob.state === "running") {
-    return json(res, 409, { ok: false, error: "уже идёт выгрузка проекта «" + dumpJob.title + "» — дождитесь её окончания" });
+    return json(res, 409, {
+      ok: false,
+      error: "уже идёт " + (dumpJob.label || "операция") + " проекта «" + dumpJob.title + "» — дождитесь её окончания",
+    });
   }
 
   const common = readCommon();
@@ -550,21 +671,44 @@ async function startDump(ctx, req, res) {
   if (base.error) return json(res, 400, { ok: false, error: base.error });
 
   const format = body?.format === "Plain" ? "Plain" : "Hierarchical";
-  const dir = resolveDumpDir(projectPath, body?.dir ?? params.dumpDir);
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch (error) {
-    return json(res, 400, { ok: false, error: "не удалось создать каталог выгрузки: " + (error?.message || error) });
+  const sourceDir = resolveDumpDir(projectPath, body?.dir ?? params.dumpDir);
+  // Расширения кладём отдельной папкой рядом с конфигурацией (по умолчанию это
+  // корень проекта): выгрузка всех расширений в общий каталог смешала бы их
+  // объекты с объектами основной конфигурации.
+  const targetDir = operation === "extensions"
+    ? canonical(join(sourceDir, String(body?.extensionsDir ?? "").trim() || "Extensions"))
+    : sourceDir;
+
+  const notes = [];
+
+  if (operation === "load") {
+    // Загрузка из каталога без Configuration.xml заменит конфигурацию базы
+    // пустой — это отказ, а не попытка, которую 1С потом объяснит своим текстом.
+    if (!existsSync(join(sourceDir, "Configuration.xml"))) {
+      return json(res, 400, {
+        ok: false,
+        error: "в каталоге нет Configuration.xml: " + sourceDir +
+          ". Загрузка из такого каталога заменит конфигурацию базы пустой — сначала выгрузите конфигурацию в файлы.",
+      });
+    }
+  } else {
+    try {
+      mkdirSync(targetDir, { recursive: true });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: "не удалось создать каталог: " + (error?.message || error) });
+    }
   }
 
   // -update работает только при наличии файла версий в каталоге выгрузки: без него
   // Конфигуратор падает с ошибкой (в отличие от несовпадения версии формата,
   // которое закрывает -force). Нет файла — делаем полную выгрузку и пишем об этом.
-  const notes = [];
-  let update = body?.update === true;
-  if (update && !existsSync(join(dir, "ConfigDumpInfo.xml"))) {
-    update = false;
-    notes.push("в каталоге выгрузки нет ConfigDumpInfo.xml — выполнена полная выгрузка, а не обновление");
+  let update = false;
+  if (operation === "dump") {
+    update = body?.update === true;
+    if (update && !existsSync(join(targetDir, "ConfigDumpInfo.xml"))) {
+      update = false;
+      notes.push("в каталоге выгрузки нет ConfigDumpInfo.xml — выполнена полная выгрузка, а не обновление");
+    }
   }
 
   // Снятие локов — только для файловой базы, заданной путём (не строкой соединения).
@@ -574,23 +718,23 @@ async function startDump(ctx, req, res) {
   const jobDir = join(DSH_HOME, "1c-project-properties", "jobs");
   mkdirSync(jobDir, { recursive: true });
   const stamp = String(Date.now());
-  const logFile = join(jobDir, "dump-" + stamp + ".log");
-  const resultFile = join(jobDir, "dump-" + stamp + ".result");
+  const logFile = join(jobDir, operation + "-" + stamp + ".log");
+  const resultFile = join(jobDir, operation + "-" + stamp + ".result");
 
-  const args = [
-    "DESIGNER",
-    base.arg,
-    ...(params.user ? ["/N" + params.user] : []),
-    ...(params.password ? ["/P" + params.password] : []),
-    ...(params.unlockCode ? ["/UC" + params.unlockCode] : []),
-    "/DumpConfigToFiles", dir,
-    "-Format", format,
-    ...(update ? ["-update", "-force"] : []),
-    "/Out" + logFile,
-    "/DumpResult" + resultFile,
-    "/DisableStartupDialogs",
-    "/DisableStartupMessages",
-  ];
+  const { args, notes: argNotes } = buildDesignerArgs({
+    operation,
+    baseArg: base.arg,
+    params,
+    format,
+    sourceDir,
+    targetDir,
+    update,
+    updateDb: body?.updateDb !== false,
+    dynamic: body?.dynamic !== false,
+    logFile,
+    resultFile,
+  });
+  notes.push(...argNotes);
 
   const title = basename(projectPath);
   const logLines = [];
@@ -598,9 +742,13 @@ async function startDump(ctx, req, res) {
   logLines.push(...notes);
   const job = {
     state: "running",
+    operation,
+    label: spec.label,
+    counts: spec.producesFiles,
     path: projectPath,
     title,
-    dir,
+    dir: targetDir,
+    sourceDir,
     startedAt: Date.now(),
     finishedAt: null,
     command: [platform.exe, ...args.map((a, i) => (i > 0 && ["/P", "/N"].some((k) => a.startsWith(k)) ? a.slice(0, 3) + "…" : a))].join(" "),
@@ -633,7 +781,7 @@ async function startDump(ctx, req, res) {
     } catch {}
     job.state = "failed";
     job.finishedAt = Date.now();
-    job.error = "выгрузка превысила лимит " + Math.round(DUMP_TIMEOUT_MS / 60000) + " мин и была остановлена";
+    job.error = spec.label + " превысила лимит " + Math.round(DUMP_TIMEOUT_MS / 60000) + " мин и была остановлена";
     job.log = (job.log + "\n" + decodeLog(logFile)).slice(-JOB_TAIL_CHARS);
   }, DUMP_TIMEOUT_MS);
 
@@ -645,29 +793,52 @@ async function startDump(ctx, req, res) {
     const text = decodeLog(logFile);
     job.log = (job.log + (text ? "\n" + text : "")).slice(-JOB_TAIL_CHARS);
     job.resultCode = decodeLog(resultFile).trim();
-    job.files = countFiles(dir);
+    job.files = spec.producesFiles ? countFiles(targetDir) : 0;
+    job.version = readConfigVersion(sourceDir);
+
+    // Пустой каталог при успешном вердикте платформы — не ошибка, но и не
+    // очевидность: у расширений это штатный результат базы без расширений.
+    const finishDone = () => {
+      job.state = "done";
+      if (spec.producesFiles && job.files === 0) {
+        job.log = (job.log + "\n" + spec.label + ": файлов не создано." +
+          (operation === "extensions"
+            ? " Если расширений в базе нет — это нормальный результат; иначе проверьте, поддерживает ли эта версия платформы ключ -AllExtensions."
+            : "")).slice(-JOB_TAIL_CHARS);
+      }
+    };
 
     // 1C пишет /Out и /DumpResult асинхронно — даём файлам дописаться.
-    if (!job.resultCode && job.files === 0) {
+    if (!job.resultCode && (!spec.producesFiles || job.files === 0)) {
       setTimeout(() => {
         job.resultCode = decodeLog(resultFile).trim();
-        job.files = countFiles(dir);
-        job.state = job.resultCode === "0" || job.files > 0 ? "done" : "failed";
-        if (job.state === "failed") job.error = "выгрузка не создала файлов" + (job.exitCode ? " (код " + job.exitCode + ")" : "");
-        else job.version = readConfigVersion(dir);
+        job.files = spec.producesFiles ? countFiles(targetDir) : 0;
+        if (job.resultCode === "0" || (spec.producesFiles && job.files > 0)) {
+          finishDone();
+          job.version = readConfigVersion(sourceDir);
+          return;
+        }
+        job.state = "failed";
+        job.error = (spec.producesFiles
+          ? spec.label + " не создала файлов" + (job.exitCode ? " (код " + job.exitCode + ")" : "")
+          : spec.label + " не подтверждена: /DumpResult пуст" + (job.exitCode ? " (код " + job.exitCode + ")" : "")) +
+          failureHint(operation);
       }, 3000);
       return;
     }
 
-    if (job.resultCode === "0" || (job.files > 0 && job.exitCode === 0)) {
-      job.state = "done";
-      job.version = readConfigVersion(dir);
+    // /DumpResult — собственный вердикт платформы (0 при успехе). Код возврата
+    // процесса ненадёжен: пакетная команда может провалиться при exit 0, а для
+    // загрузки /DumpResult вообще единственный признак того, что она прошла.
+    if (job.resultCode === "0" || (spec.producesFiles && job.files > 0 && job.exitCode === 0)) {
+      finishDone();
       return;
     }
     job.state = "failed";
-    job.error = job.resultCode === "1"
+    job.error = (job.resultCode === "1"
       ? "Конфигуратор сообщил об ошибке: " + (firstLogLine(text) || "см. лог")
-      : "выгрузка не создала файлов" + (job.exitCode ? " (код " + job.exitCode + ")" : "");
+      : spec.label + " завершилась без результата" + (job.exitCode ? " (код " + job.exitCode + ")" : "")) +
+      failureHint(operation);
   };
 
   child.on("exit", finalize);
@@ -726,6 +897,7 @@ function describeProject(entry, common) {
     params: info.params,
     effectivePlatformPath: platformPath || common.platformPath,
     platformFromCommon: platformPath === "",
+    rules: isDirectory(entry.path) ? rulesSummary(entry.path) : { deployed: false },
   };
 }
 
@@ -879,17 +1051,120 @@ export function apply(ctx) {
     },
   });
 
-  // ── выгрузка конфигурации в файлы ────────────────────────────────────────
+  // ── пакетные операции Конфигуратора ──────────────────────────────────────
+  //
+  // Все три идут через один движок и одну задачу: 1С блокирует конфигурацию
+  // базы, поэтому одновременно выполняется только одна операция.
 
   ctx.webServer.register({
     kind: "exact",
     path: ROUTE + "/dump-start",
     handler: (req, res) => {
-      startDump(ctx, req, res);
+      startDesignerJob("dump", req, res);
+    },
+  });
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/load-start",
+    handler: (req, res) => {
+      startDesignerJob("load", req, res);
+    },
+  });
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/extensions-start",
+    handler: (req, res) => {
+      startDesignerJob("extensions", req, res);
     },
   });
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-status", handler: dumpStatus });
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-cancel", handler: cancelDump });
+
+  // ── правила 1С в проекте (1c-rules) ──────────────────────────────────────
+  //
+  // Набор правил кладёт десктоп в $DSH_HOME/1c-rules; здесь он раскладывается
+  // в проекте в ту структуру, которую читает DSH: <проект>/.dsh/skills для
+  // навыков и <проект>/AGENTS.md как всегда включённый контекст. Ссылки правил
+  // на content/... при этом переписываются на проектные пути — без этого они
+  // указывают в никуда. Подробности контракта — lib/rules-deploy.js.
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/rules-status",
+    handler: (req, res) => {
+      try {
+        const target = new URL(req.url, "http://127.0.0.1").searchParams.get("path");
+        if (!target) return json(res, 400, { ok: false, error: "параметр path обязателен" });
+        const projectPath = canonical(target);
+        if (!isDirectory(projectPath)) {
+          return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        }
+        const payload = readPayload(DSH_HOME);
+        json(res, 200, {
+          ok: true,
+          payload: payload.ok
+            ? {
+                ok: true,
+                root: payload.root,
+                version: payload.manifest.version || "",
+                digest: payload.manifest.digest || "",
+                derived: payload.derived === true,
+              }
+            : { ok: false, root: payload.root, error: payload.error },
+          deploy: rulesStatus({ dshHome: DSH_HOME, projectPath }),
+          sections: SECTIONS.map((id) => ({ id, label: SECTION_LABELS[id] })),
+        });
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/rules-deploy",
+    handler: async (req, res) => {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const projectPath = canonical(String(body?.path ?? "").trim());
+        if (!isDirectory(projectPath)) {
+          return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        }
+        const result = deployRules({
+          dshHome: DSH_HOME,
+          projectPath,
+          sections: Array.isArray(body?.sections) && body.sections.length > 0 ? body.sections : undefined,
+          params: readParams(projectPath).params,
+          common: readCommon(),
+          includePassword: body?.includePassword === true,
+          useEdt: body?.useEdt === true,
+          dryRun: body?.dryRun === true,
+          force: body?.force === true,
+        });
+        json(res, result.ok ? 200 : 400, result);
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/rules-remove",
+    handler: async (req, res) => {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const projectPath = canonical(String(body?.path ?? "").trim());
+        if (!isDirectory(projectPath)) {
+          return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        }
+        const result = removeRules({ projectPath, force: body?.force === true });
+        json(res, result.ok ? 200 : 400, result);
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
 
   // Уходя, не оставляем висящий Конфигуратор.
   ctx.on("dispose", () => {

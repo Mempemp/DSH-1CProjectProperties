@@ -2,9 +2,13 @@
 //
 // Вкладка «1С: Параметры проектов» в Settings: список проектов (воркспейсы DSH +
 // добавленные вручную пути) и общие значения. Параметры конкретного проекта
-// редактируются в отдельном модальном окне (шестерёнка у строки проекта) — в
-// колонке настроек шириной ~520 px форма не помещается.
+// редактируются в отдельном модальном окне — в колонке настроек шириной ~520 px
+// форма не помещается.
 // Значения пишет хост-половина в файл .dsh/1c-project.json внутри папки проекта.
+//
+// Оформление: один инжектируемый <style> с классами p1c-* (он даёт hover/focus/
+// disabled и скроллбар, чего инлайновые стили выразить не могут) + минимальные
+// инлайновые стили только для раскладки. Никаких внешних зависимостей.
 window.__ModuleLoader__.load({
   id: "dsh-1c-project-properties",
   factory: (require) => {
@@ -36,162 +40,318 @@ window.__ModuleLoader__.load({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data || data.ok === false) {
-        throw new Error((data && data.error) || response.statusText || "HTTP " + response.status);
+        const detail = (data && data.error) || response.statusText || "HTTP " + response.status;
+        // 404 без тела — это почти всегда рассинхрон половин плагина: клиентская
+        // половина подхватывается перезагрузкой страницы, хост-часть — только
+        // стартом DSH. Без объяснения такое читается как «плагин сломан».
+        if (response.status === 404 && data === null) {
+          throw new Error(
+            "DSH не знает маршрут " + API + path + " (" + detail + "): в запущенном процессе старая хост-часть плагина. " +
+            "Перезапустите DSH — клиентская половина обновляется перезагрузкой страницы, хост-часть только при старте.",
+          );
+        }
+        throw new Error(detail);
       }
       return data;
     }
 
-    const styles = {
-      input: {
-        boxSizing: "border-box",
-        width: "100%",
-        height: 30,
-        padding: "0 8px",
-        borderRadius: 6,
-        border: "1px solid var(--dsw-alias-border-l2)",
-        background: "var(--dsw-alias-bg-base)",
-        color: "inherit",
-        font: "var(--dsw-font-s-14)",
-      },
-      card: {
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-        border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: 10,
-        padding: 12,
-      },
-      cardTitle: { fontSize: 13, fontWeight: 600 },
-      subtitle: { opacity: 0.6, fontSize: 12, marginTop: 3, lineHeight: 1.5 },
-      fieldLabel: { marginBottom: 4, opacity: 0.7, fontSize: 12 },
-      hint: { marginTop: 4, opacity: 0.55, fontSize: 11, lineHeight: 1.5 },
-      path: { fontFamily: "monospace", fontSize: 11, opacity: 0.7, wordBreak: "break-all", userSelect: "text" },
-      primaryButton: {
-        flex: "0 0 auto",
-        height: 30,
-        padding: "0 14px",
-        border: "none",
-        borderRadius: 8,
-        cursor: "pointer",
-        background: "var(--dsw-alias-state-business-primary, #3964fe)",
-        color: "#fff",
-        font: "var(--dsw-font-s-14)",
-      },
-      secondaryButton: {
-        flex: "0 0 auto",
-        height: 30,
-        padding: "0 12px",
-        borderRadius: 8,
-        cursor: "pointer",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        background: "transparent",
-        color: "inherit",
-        font: "var(--dsw-font-s-14)",
-      },
-      dangerButton: {
-        flex: "0 0 auto",
-        height: 30,
-        padding: "0 12px",
-        borderRadius: 8,
-        cursor: "pointer",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        background: "transparent",
-        color: "#e57373",
-        font: "var(--dsw-font-s-14)",
-      },
-      // строка проекта в списке
-      row: {
-        display: "flex",
-        flexDirection: "column",
-        gap: 2,
-        width: "100%",
-        minWidth: 0,
-        padding: "8px 10px",
-        borderRadius: 8,
-        border: "1px solid transparent",
-        background: "rgba(127,127,127,0.06)",
-        cursor: "pointer",
-      },
-      rowTop: { display: "flex", alignItems: "center", gap: 8, minWidth: 0 },
-      rowTitle: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-      // модальное окно
-      overlay: {
-        position: "fixed",
-        inset: 0,
-        zIndex: 2000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      },
-      mask: {
-        position: "absolute",
-        inset: 0,
-        background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,0.45))",
-      },
-      dialog: {
-        position: "relative",
-        zIndex: 1,
-        display: "flex",
-        flexDirection: "column",
-        width: 760,
-        maxWidth: "calc(100vw - 48px)",
-        maxHeight: "calc(100vh - 48px)",
-        borderRadius: 24,
-        background: "var(--dsw-alias-bg-layer-2, #1f2026)",
-        color: "var(--dsw-alias-label-primary, inherit)",
-        boxShadow: "var(--dsw-elevation-prominent, 0 18px 48px rgba(0,0,0,.45))",
-        overflow: "hidden",
-      },
-      dialogHeader: {
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "space-between",
-        gap: 12,
-        padding: "20px 24px 12px",
-      },
-      dialogBody: { padding: "4px 24px 8px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 },
-      dialogFooter: {
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "12px 24px 18px",
-        flexWrap: "wrap",
-      },
-      grid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
-      full: { gridColumn: "1 / -1" },
-      sectionTitle: { fontSize: 13, fontWeight: 600, marginBottom: 8 },
-    };
+    // ── оформление ───────────────────────────────────────────────────────────
 
-    const EMPTY_FORM = { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" };
+    const CSS = `
+.p1c-root, .p1c-root * { box-sizing: border-box; }
+.p1c-root {
+  --p1c-border: var(--dsw-alias-border-l2, rgba(255,255,255,.14));
+  --p1c-surface: var(--dsw-alias-bg-layer-2, #1f2026);
+  --p1c-field-bg: var(--dsw-alias-bg-base, rgba(127,127,127,.08));
+  --p1c-primary: var(--dsw-alias-state-business-primary, #3964fe);
+  --p1c-danger: #e57373;
+  --p1c-warn: #e0a030;
+  --p1c-ok: #4caf50;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.p1c-root h1, .p1c-root h2, .p1c-root h3, .p1c-root p { margin: 0; font-size: inherit; font-weight: inherit; }
+.p1c-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-    const EMPTY_RUN = { format: "Hierarchical", update: false, cleanLocks: false };
+.p1c-title { font-size: 15px; font-weight: 600; }
+.p1c-subtitle { font-size: 12px; opacity: .62; margin-top: 4px; line-height: 1.5; }
 
-    const gearIcon = () =>
+.p1c-card { border: 1px solid var(--p1c-border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.p1c-card__title { font-size: 13px; font-weight: 600; }
+.p1c-card__hint { font-size: 11.5px; opacity: .6; margin-top: 4px; line-height: 1.5; }
+
+.p1c-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.p1c-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.p1c-label { font-size: 12px; font-weight: 500; opacity: .78; }
+.p1c-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.p1c-span2 { grid-column: 1 / -1; }
+@media (max-width: 640px) { .p1c-grid { grid-template-columns: 1fr; } }
+
+.p1c-input, .p1c-select {
+  width: 100%; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--p1c-border); background: var(--p1c-field-bg); color: inherit;
+  font: var(--dsw-font-s-14, 400 14px/1.4 inherit);
+}
+.p1c-select { padding-right: 6px; cursor: pointer; }
+.p1c-select--format { width: 170px; height: 30px; }
+.p1c-input::placeholder { color: inherit; opacity: .38; }
+.p1c-input:focus, .p1c-select:focus {
+  outline: none;
+  border-color: var(--p1c-primary);
+  box-shadow: 0 0 0 3px rgba(57,100,254,.3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--p1c-primary) 30%, transparent);
+}
+.p1c-input:disabled, .p1c-select:disabled { opacity: .5; cursor: not-allowed; }
+
+.p1c-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.p1c-check-row { display: inline-flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.4; cursor: pointer; padding: 2px 0; }
+.p1c-check-row--compact { font-size: 11px; opacity: .7; }
+.p1c-check-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--p1c-primary); cursor: pointer; }
+.p1c-check-row.is-disabled { opacity: .45; pointer-events: none; }
+
+.p1c-btn {
+  height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: inherit; cursor: pointer; white-space: nowrap;
+  font: var(--dsw-font-s-14, 400 14px/1.4 inherit);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background-color .12s ease, border-color .12s ease, filter .12s ease, opacity .12s ease;
+}
+/* Недоступная кнопка должна читаться: полупрозрачность ниже ~0.8 превращает
+   подпись в серое пятно, поэтому гасим фон, а не текст. */
+.p1c-btn:disabled { cursor: not-allowed; }
+.p1c-btn--primary:disabled { background: rgba(57,100,254,.45); color: rgba(255,255,255,.9); }
+.p1c-btn--primary:disabled { background: color-mix(in srgb, var(--p1c-primary) 45%, transparent); }
+.p1c-btn--ghost:disabled { background: rgba(127,127,127,.1); border-color: var(--p1c-border); opacity: .9; }
+.p1c-btn--danger:disabled { opacity: .8; }
+.p1c-btn--primary { background: var(--p1c-primary); color: #fff; }
+.p1c-btn--primary:not(:disabled):hover { filter: brightness(1.08); }
+.p1c-btn--ghost { border-color: var(--p1c-border); }
+.p1c-btn--ghost:not(:disabled):hover { background: rgba(127,127,127,.12); }
+.p1c-btn--danger { color: var(--p1c-danger); }
+.p1c-btn--danger:not(:disabled):hover { background: rgba(229,115,115,.12); border-color: rgba(229,115,115,.4); }
+.p1c-btn--quiet { padding: 0 8px; opacity: .8; }
+.p1c-btn--quiet:not(:disabled):hover { opacity: 1; background: rgba(127,127,127,.12); }
+.p1c-btn--icon { width: 30px; height: 30px; padding: 0; }
+.p1c-btn--icon:not(:disabled):hover { background: rgba(127,127,127,.14); }
+.p1c-btn:focus-visible { outline: 2px solid var(--p1c-primary); outline-offset: 1px; }
+
+.p1c-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* min-width: 0 обязателен: без него flex-элемент с полем ввода внутри
+   раздувает строку и кнопка вылезает за границу карточки. */
+.p1c-actions__grow { flex: 1 1 auto; min-width: 0; }
+
+.p1c-project {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px;
+  border: 1px solid transparent; border-radius: 10px; background: rgba(127,127,127,.06);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.p1c-project:hover { border-color: var(--p1c-border); background: rgba(127,127,127,.1); }
+.p1c-project:focus-visible { outline: 2px solid var(--p1c-primary); outline-offset: 1px; }
+.p1c-project__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.p1c-project__name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1c-project__path { font-size: 11px; opacity: .5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1c-badge { flex: 0 0 auto; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--p1c-border); opacity: .85; }
+.p1c-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .45; }
+.p1c-dot--ok { background: var(--p1c-ok); opacity: 1; }
+.p1c-dot--warn { background: var(--p1c-warn); opacity: 1; }
+.p1c-dot--err { background: var(--p1c-danger); opacity: 1; }
+.p1c-strong { font-weight: 600; }
+.p1c-sm { font-size: 12px; }
+.p1c-text--ok { color: var(--p1c-ok); }
+.p1c-text--warn { color: var(--p1c-warn); }
+.p1c-text--err { color: var(--p1c-danger); }
+.p1c-chevron { flex: 0 0 auto; opacity: .35; display: flex; }
+
+.p1c-overlay { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.p1c-mask { position: absolute; inset: 0; background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,.5)); }
+.p1c-dialog {
+  position: relative; z-index: 1; display: flex; flex-direction: column;
+  width: 820px; max-width: 100%; max-height: 100%; overflow: hidden;
+  border: 1px solid var(--p1c-border); border-radius: 18px;
+  background: var(--p1c-surface); color: var(--dsw-alias-label-primary, inherit);
+  box-shadow: var(--dsw-elevation-prominent, 0 18px 48px rgba(0,0,0,.5));
+}
+.p1c-dialog__head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 14px; border-bottom: 1px solid var(--p1c-border); }
+.p1c-dialog__headmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.p1c-dialog__project { font-size: 13px; font-weight: 600; }
+.p1c-dialog__path { font-size: 11.5px; opacity: .6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1c-dialog__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.p1c-dialog__body::-webkit-scrollbar { width: 10px; }
+.p1c-dialog__body::-webkit-scrollbar-thumb { background: rgba(127,127,127,.3); border: 3px solid transparent; border-radius: 8px; background-clip: content-box; }
+.p1c-dialog__foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--p1c-border); }
+.p1c-dialog__footleft { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.p1c-dialog__footright { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+.p1c-details { border-top: 1px dashed var(--p1c-border); padding-top: 10px; }
+.p1c-details > summary { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; opacity: .75; cursor: pointer; list-style: none; }
+.p1c-details > summary::-webkit-details-marker { display: none; }
+.p1c-details > summary:hover { opacity: 1; }
+.p1c-details__chev { display: flex; transition: transform .15s ease; }
+.p1c-details[open] > summary .p1c-details__chev { transform: rotate(90deg); }
+.p1c-details__body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+
+.p1c-status { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; }
+.p1c-status__dot { flex: 0 0 auto; margin-top: 6px; }
+.p1c-kv { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.p1c-kv > span { white-space: nowrap; }
+.p1c-log {
+  margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 8px;
+  background: rgba(0,0,0,.28); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.p1c-note { font-size: 11.5px; line-height: 1.5; opacity: .62; }
+.p1c-note--warn { color: var(--p1c-warn); opacity: 1; }
+.p1c-note--err { color: var(--p1c-danger); opacity: 1; }
+.p1c-note--ok { color: var(--p1c-ok); opacity: 1; }
+.p1c-stack { display: flex; flex-direction: column; gap: 14px; }
+.p1c-stack--tight { gap: 6px; }
+`;
+
+    let stylesInjected = false;
+    function injectStyles() {
+      if (stylesInjected) return;
+      if (typeof document === "undefined" || !document.head) return;
+      const tag = document.createElement("style");
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+      stylesInjected = true;
+    }
+
+    // ── мелкие строительные блоки ────────────────────────────────────────────
+
+    const cx = (...parts) => parts.filter(Boolean).join(" ");
+
+    function Card(props) {
+      return jsxs("section", {
+        className: "p1c-card",
+        children: [
+          props.title || props.hint
+            ? jsxs("header", {
+                children: [
+                  props.title ? jsx("div", { className: "p1c-card__title", children: props.title }) : null,
+                  props.hint ? jsx("div", { className: "p1c-card__hint", children: props.hint }) : null,
+                ],
+              })
+            : null,
+          props.children,
+        ],
+      });
+    }
+
+    function Field(props) {
+      return jsxs("div", {
+        className: cx("p1c-field", props.wide && "p1c-span2"),
+        children: [
+          jsxs("div", {
+            className: "p1c-label-row",
+            children: [
+              props.htmlFor
+                ? jsx("label", { className: "p1c-label", htmlFor: props.htmlFor, children: props.label })
+                : jsx("span", { className: "p1c-label", children: props.label }),
+              props.labelExtra ?? null,
+            ],
+          }),
+          props.children,
+          props.hint ? jsx("div", { className: "p1c-note", children: props.hint }) : null,
+        ],
+      });
+    }
+
+    function Check(props) {
+      return jsxs("label", {
+        className: cx("p1c-check-row", props.compact && "p1c-check-row--compact", props.disabled && "is-disabled"),
+        title: props.title,
+        children: [
+          jsx("input", {
+            type: "checkbox",
+            checked: props.checked,
+            disabled: props.disabled,
+            onChange: props.onChange,
+          }),
+          jsx("span", { children: props.children }),
+        ],
+      });
+    }
+
+    function Btn(props) {
+      return jsx("button", {
+        type: "button",
+        title: props.title,
+        disabled: props.disabled,
+        onClick: props.onClick,
+        className: cx("p1c-btn", "p1c-btn--" + (props.variant || "ghost"), props.className),
+        children: props.children,
+      });
+    }
+
+    function Dot(props) {
+      return jsx("span", {
+        className: cx("p1c-dot", props.tone && "p1c-dot--" + props.tone, props.className),
+        title: props.title,
+      });
+    }
+
+    const ChevronIcon = (props) =>
+      jsx("svg", {
+        width: props && props.size ? props.size : 14,
+        height: props && props.size ? props.size : 14,
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: 2,
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        children: jsx("path", { d: "m9 18 6-6-6-6" }),
+      });
+
+    /** Сводка раскрывающегося блока: родной маркер details убран, шеврон свой. */
+    const Summary = (props) =>
+      jsxs("summary", {
+        children: [
+          jsx("span", { className: "p1c-details__chev", children: jsx(ChevronIcon, { size: 12 }) }),
+          jsx("span", { children: props.children }),
+        ],
+      });
+
+    const CloseIcon = () =>
       jsxs("svg", {
         width: 15,
         height: 15,
         viewBox: "0 0 24 24",
         fill: "none",
         stroke: "currentColor",
-        strokeWidth: 1.8,
+        strokeWidth: 2,
         strokeLinecap: "round",
-        strokeLinejoin: "round",
-        children: [
-          jsx("circle", { cx: 12, cy: 12, r: 3.2 }),
-          jsx("path", {
-            d: "M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.7h.09A1.7 1.7 0 0 0 10.11 3.14V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z",
-          }),
-        ],
+        children: [jsx("path", { d: "M18 6 6 18" }), jsx("path", { d: "m6 6 12 12" })],
       });
 
-    const JOB_LABEL = {
-      running: "идёт выгрузка",
-      done: "выгрузка завершена",
-      failed: "выгрузка не удалась",
-      cancelled: "выгрузка отменена",
+    const EMPTY_FORM = { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" };
+
+    const EMPTY_RUN = { format: "Hierarchical", update: false, cleanLocks: false };
+
+    // Параметры обратной загрузки: по умолчанию обновляем и конфигурацию базы,
+    // причём динамически — так не нужно выгонять пользователей из базы.
+    const EMPTY_LOAD = { updateDb: true, dynamic: true };
+
+    // Разделы развёртывания правил: тот же полный список понимает хост-часть,
+    // и разворачивается всегда целиком — выбирать подмножество в UI не нужно.
+    const EMPTY_RULES_OPTIONS = { includePassword: false, useEdt: false };
+
+    const STATUS_LABEL = {
+      written: "записано",
+      unchanged: "без изменений",
+      preserved: "сохранено ваше",
+      removed: "удалено",
     };
 
-    const JOB_COLOR = { running: "inherit", done: "#4caf50", failed: "#e57373", cancelled: "#e57373" };
+    const JOB_LABEL = {
+      running: "идёт операция",
+      done: "операция завершена",
+      failed: "операция не удалась",
+      cancelled: "операция отменена",
+    };
+
+    const JOB_TONE = { running: null, done: "ok", failed: "err", cancelled: "err" };
 
     /** Модальное окно параметров одного проекта. */
     function ProjectDialog(props) {
@@ -204,19 +364,31 @@ window.__ModuleLoader__.load({
         setShowPassword,
         runOptions,
         setRunOptions,
+        loadOptions,
+        setLoadOptions,
         job,
         busy,
         infoBaseHint,
         platformPlaceholder,
         infoBases,
         platforms,
+        rulesInfo,
+        rulesResult,
+        rulesOptions,
+        setRulesOptions,
+        onRulesDeploy,
+        onRulesRemove,
         onSave,
         onClear,
         onForget,
         onStartDump,
+        onStartLoad,
+        onStartExtensions,
         onCancelDump,
         onClose,
       } = props;
+
+      injectStyles();
 
       // Escape закрывает окно и НЕ закрывает настройки: перехватываем на фазе
       // перехвата, пока обработчик панели настроек (bubble) не сработал.
@@ -233,192 +405,489 @@ window.__ModuleLoader__.load({
 
       const running = Boolean(job && job.state === "running");
       const jobIsHere = Boolean(job && job.path === project.path);
+      const operationsLocked = busy || running;
       const canRun = Boolean(project.params.infobasePath);
-      const checkbox = (label, key) =>
-        jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }, children: [
-          jsx("input", {
-            type: "checkbox",
-            checked: runOptions[key],
-            disabled: running && jobIsHere,
-            onChange: (e) => setRunOptions((o) => ({ ...o, [key]: e.target.checked })),
-          }),
-          label,
-        ] });
 
-      const jobLine = job && jobIsHere && job.state !== "idle"
-        ? jsxs("div", { style: { fontSize: 12, lineHeight: 1.6 }, children: [
-            jsx("span", { style: { fontWeight: 600, color: JOB_COLOR[job.state] || "inherit" }, children: JOB_LABEL[job.state] || job.state }),
-            jsx("span", { style: { opacity: 0.7 }, children: " · " + Math.round((job.elapsedMs || 0) / 1000) + " с" }),
-            job.files ? jsx("span", { style: { opacity: 0.7 }, children: " · файлов: " + job.files }) : null,
-            job.version ? jsx("span", { style: { opacity: 0.7 }, children: " · версия конфигурации: " + job.version }) : null,
-            job.error ? jsx("div", { style: { color: "#e57373" }, children: job.error }) : null,
-            jsx("div", { style: { opacity: 0.7, wordBreak: "break-all" }, children: "каталог: " + job.dir }),
-          ]})
-        : null;
-
-      const jobLog = job && jobIsHere && job.log && job.state !== "running"
-        ? jsx("pre", {
-            style: {
-              margin: 0,
-              maxHeight: 220,
-              overflow: "auto",
-              padding: 8,
-              borderRadius: 8,
-              background: "rgba(127,127,127,0.08)",
-              fontSize: 11,
-              lineHeight: 1.45,
-              whiteSpace: "pre-wrap",
-            },
-            children: job.log,
+      // ── прогресс операции ─────────────────────────────────────────────────
+      const jobBlock = job && jobIsHere && job.state !== "idle"
+        ? jsxs("div", {
+            className: "p1c-stack p1c-stack--tight",
+            children: [
+              jsxs("div", {
+                className: "p1c-status",
+                children: [
+                  jsx(Dot, { className: "p1c-status__dot", tone: JOB_TONE[job.state] || undefined }),
+                  jsxs("div", {
+                    children: [
+                      jsx("div", {
+                        className: cx("p1c-strong", JOB_TONE[job.state] && "p1c-text--" + JOB_TONE[job.state]),
+                        children: JOB_LABEL[job.state] || job.state,
+                      }),
+                      jsx("div", {
+                        className: "p1c-kv p1c-note",
+                        children: [
+                          job.label ? jsx("span", { children: job.label }) : null,
+                          jsx("span", { children: Math.round((job.elapsedMs || 0) / 1000) + " с" }),
+                          job.counts && job.files ? jsx("span", { children: "файлов: " + job.files }) : null,
+                          job.version ? jsx("span", { children: "версия: " + job.version }) : null,
+                        ].filter(Boolean),
+                      }),
+                      jsx("div", { className: "p1c-note p1c-mono", children: job.dir }),
+                      job.error ? jsx("div", { className: "p1c-note p1c-note--err", children: job.error }) : null,
+                    ],
+                  }),
+                ],
+              }),
+              job.log && job.state !== "running"
+                ? jsxs("details", {
+                    className: "p1c-details",
+                    children: [
+                      jsx(Summary, { children: "Лог Конфигуратора" }),
+                      jsx("pre", { className: "p1c-log", children: job.log }),
+                    ],
+                  })
+                : null,
+            ],
           })
         : null;
 
-      return portal(jsxs("div", { style: styles.overlay, children: [
-        jsx("div", { style: styles.mask, onClick: onClose, "aria-hidden": "true" }),
-        jsxs("div", { style: styles.dialog, role: "dialog", "aria-modal": "true", children: [
-          jsxs("div", { style: styles.dialogHeader, children: [
-            jsxs("div", { style: { minWidth: 0 }, children: [
-              jsx("div", { style: { fontSize: 15, fontWeight: 600 }, children: "Параметры проекта" }),
-              jsx("div", { style: { fontSize: 13, marginTop: 2 }, children: project.title }),
-              jsx("div", { style: styles.path, children: project.path }),
-            ]}),
-            jsx("button", {
-              type: "button",
-              title: "Закрыть",
-              onClick: onClose,
-              style: { flex: "0 0 auto", width: 28, height: 28, padding: 0, border: "none", borderRadius: 28, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 18, lineHeight: "24px" },
-              children: "×",
-            }),
-          ]}),
-          jsxs("div", { style: styles.dialogBody, children: [
-            jsxs("div", { children: [
-              jsx("div", { style: styles.sectionTitle, children: "Параметры 1С" }),
-              jsxs("div", { style: styles.grid, children: [
-                jsxs("div", { style: styles.full, children: [
-                  jsx("div", { style: styles.fieldLabel, children: "Путь к базе" }),
-                  jsx("input", {
-                    style: styles.input,
-                    list: INFOBASE_LIST_ID,
-                    autoFocus: true,
-                    value: form.infobasePath,
-                    placeholder: 'C:\\Базы\\Бухгалтерия  либо  Srvr="server";Ref="buh";',
-                    onChange: (e) => setForm((f) => ({ ...f, infobasePath: e.target.value })),
-                  }),
-                  jsxs("div", { style: styles.hint, children: [
-                    "Папка файловой базы или строка соединения с сервером 1С. Хранится как есть, без проверки.",
-                    jsx("div", { children: infoBaseHint }),
-                  ]}),
-                ]}),
-                jsxs("div", { children: [
-                  jsx("div", { style: styles.fieldLabel, children: "Пользователь" }),
-                  jsx("input", {
-                    style: styles.input,
-                    value: form.user,
-                    onChange: (e) => setForm((f) => ({ ...f, user: e.target.value })),
-                  }),
-                ]}),
-                jsxs("div", { children: [
-                  jsxs("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between" }, children: [
-                    jsx("div", { style: styles.fieldLabel, children: "Пароль" }),
-                    jsxs("label", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, opacity: 0.7, cursor: "pointer" }, children: [
-                      jsx("input", { type: "checkbox", checked: showPassword, onChange: (e) => setShowPassword(e.target.checked) }),
-                      "показать",
-                    ]}),
-                  ]}),
-                  jsx("input", {
-                    style: styles.input,
-                    type: showPassword ? "text" : "password",
-                    value: form.password,
-                    onChange: (e) => setForm((f) => ({ ...f, password: e.target.value })),
-                  }),
-                ]}),
-                jsxs("div", { style: styles.full, children: [
-                  jsx("div", { style: styles.fieldLabel, children: "Путь к платформе 1С" }),
-                  jsx("input", {
-                    style: styles.input,
-                    list: PLATFORM_LIST_ID,
-                    value: form.platformPath,
-                    placeholder: platformPlaceholder,
-                    onChange: (e) => setForm((f) => ({ ...f, platformPath: e.target.value })),
-                  }),
-                  jsx("div", { style: styles.hint, children: form.platformPath
-                    ? "Путь задан для этого проекта."
-                    : "Пусто — будет использован путь из общих настроек: " + (state.common.platformPath || "не задан") }),
-                ]}),
-                jsxs("div", { children: [
-                  jsx("div", { style: styles.fieldLabel, children: "Код доступа к базе (/UC)" }),
-                  jsx("input", {
-                    style: styles.input,
-                    value: form.unlockCode,
-                    placeholder: "(пусто = без кода)",
-                    onChange: (e) => setForm((f) => ({ ...f, unlockCode: e.target.value })),
-                  }),
-                  jsx("div", { style: styles.hint, children: "Нужен, если на базе стоит блокировка установки соединений с кодом доступа." }),
-                ]}),
-                jsxs("div", { children: [
-                  jsx("div", { style: styles.fieldLabel, children: "Каталог выгрузки" }),
-                  jsx("input", {
-                    style: styles.input,
-                    value: form.dumpDir,
-                    placeholder: "пусто = корень проекта",
-                    onChange: (e) => setForm((f) => ({ ...f, dumpDir: e.target.value })),
-                  }),
-                  jsx("div", { style: styles.hint, children: "Абсолютный путь или путь внутри проекта — куда писать XML." }),
-                ]}),
-              ]}),
-            ]}),
-            jsxs("div", { children: [
-              jsx("div", { style: styles.sectionTitle, children: "Выгрузка конфигурации в файлы" }),
-              jsxs("div", { style: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 13 }, children: [
-                jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 }, children: [
-                  "Формат:",
-                  jsxs("select", {
-                    value: runOptions.format,
-                    disabled: running && jobIsHere,
-                    onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
-                    style: {
-                      height: 26,
-                      borderRadius: 6,
-                      border: "1px solid var(--dsw-alias-border-l2)",
-                      background: "var(--dsw-alias-bg-base)",
-                      color: "inherit",
-                      font: "var(--dsw-font-s-14)",
-                    },
+      // ── блок правил 1С ─────────────────────────────────────────────────────
+      const rulesDeploy = rulesInfo && rulesInfo.deploy ? rulesInfo.deploy : null;
+      const rulesPayload = rulesInfo && rulesInfo.payload ? rulesInfo.payload : null;
+      const rulesDeployed = Boolean(rulesDeploy && rulesDeploy.deployed);
+      const rulesDriftCount = rulesDeployed && rulesDeploy.modified
+        ? rulesDeploy.modified.length + (rulesDeploy.missing || []).length
+        : 0;
+      const rulesStatus = (() => {
+        if (!rulesInfo) return { text: "Проверяю состояние…", tone: null };
+        if (rulesInfo.error) return { text: String(rulesInfo.error), tone: "err" };
+        if (rulesPayload && rulesPayload.ok === false) {
+          return { text: "Набор правил не найден в DSH — обновите приложение.", tone: "warn" };
+        }
+        if (!rulesDeployed) {
+          return {
+            text: "Правила в проект не развёрнуты.",
+            detail: "Сейчас работают только общие навыки из DSH — их ссылки на правила и роли не разрешаются.",
+            tone: null,
+          };
+        }
+        const parts = ["Развёрнуто: " + (rulesDeploy.version || "версия неизвестна")];
+        if (rulesDeploy.counts) parts.push("файлов: " + rulesDeploy.counts.files);
+        if (rulesDeploy.deployedAt) parts.push(new Date(rulesDeploy.deployedAt).toLocaleString("ru-RU"));
+        if (rulesDeploy.stalePayload) parts.push("в DSH лежит более новый набор — обновите");
+        return {
+          text: parts.join(" · "),
+          tone: rulesDriftCount > 0 || rulesDeploy.stalePayload ? "warn" : "ok",
+        };
+      })();
+
+      const rulesResultSummary = rulesResult && rulesResult.summary
+        ? Object.entries(rulesResult.summary)
+            .filter(([, value]) => value > 0)
+            .map(([key, value]) => (STATUS_LABEL[key] || key) + ": " + value)
+            .join(" · ")
+        : "";
+
+      const rulesResultBlock = rulesResult
+        ? jsxs("div", {
+            className: "p1c-stack p1c-stack--tight",
+            children: [
+              jsx("div", {
+                className: "p1c-sm p1c-strong",
+                children: rulesResult.dryRun ? "Предпросмотр (ничего не записано)" : "Готово",
+              }),
+              jsx("div", { className: "p1c-note", children: rulesResultSummary || "изменений нет" }),
+              ...(rulesResult.notes || []).map((note, index) =>
+                jsx("div", { key: "n" + index, className: "p1c-note", children: note }),
+              ),
+              ...(rulesResult.warnings || []).map((warning, index) =>
+                jsx("div", { key: "w" + index, className: "p1c-note p1c-note--warn", children: warning }),
+              ),
+              ...(() => {
+                const preserved = (rulesResult.files || []).filter((file) => file.status === "preserved");
+                if (preserved.length === 0) return [];
+                const shown = preserved.slice(0, 3);
+                return [
+                  jsxs("div", {
+                    key: "preserved",
+                    className: "p1c-note",
                     children: [
-                      jsx("option", { value: "Hierarchical", children: "иерархический" }),
-                      jsx("option", { value: "Plain", children: "плоский" }),
+                      jsx("div", { children: "Оставлено ваше (" + preserved.length + "):" }),
+                      ...shown.map((file, index) =>
+                        jsx("div", { key: index, className: "p1c-mono", children: file.path + (file.detail ? " — " + file.detail : "") }),
+                      ),
+                      preserved.length > shown.length
+                        ? jsx("div", { children: "и ещё " + (preserved.length - shown.length) })
+                        : null,
                     ],
                   }),
-                ]}),
-                checkbox("только изменения (-update)", "update"),
-                checkbox("снять .cfl перед выгрузкой", "cleanLocks"),
-              ]}),
-              jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }, children: [
-                running && jobIsHere
-                  ? jsx("button", { type: "button", style: styles.dangerButton, disabled: busy, onClick: onCancelDump, children: "Отменить выгрузку" })
-                  : jsx("button", { type: "button", style: styles.primaryButton, disabled: busy || !canRun || running, onClick: onStartDump, children: "Выгрузить конфигурацию в файлы" }),
-                !canRun
-                  ? jsx("span", { style: styles.hint, children: "Сначала заполните путь к базе и нажмите «Сохранить»." })
-                  : jsx("span", { style: { opacity: 0.55, fontSize: 11 }, children: "Конфигуратор блокирует конфигурацию базы — выгрузка идёт в один поток." }),
-              ]}),
-              jobLine,
-              jobLog,
-            ]}),
-          ]}),
-          jsxs("div", { style: styles.dialogFooter, children: [
-            jsx("button", { type: "button", style: styles.primaryButton, disabled: busy, onClick: onSave, children: "Сохранить" }),
-            jsx("button", { type: "button", style: styles.dangerButton, disabled: busy || !project.hasFile, onClick: onClear, children: "Удалить файл" }),
-            project.source === "extra"
-              ? jsx("button", { type: "button", style: styles.secondaryButton, disabled: busy, onClick: onForget, children: "Убрать из списка" })
-              : null,
-            jsx("span", {
-              style: { flex: "1 1 auto", minWidth: 160, opacity: 0.55, fontSize: 11 },
-              children: "Файл: " + project.filePath + " · пароль хранится открытым текстом",
-            }),
-            jsx("button", { type: "button", style: styles.secondaryButton, onClick: onClose, children: "Закрыть" }),
-          ]}),
-        ]}),
-      ]}));
+                ];
+              })(),
+            ],
+          })
+        : null;
+
+      return portal(jsxs("div", {
+        className: "p1c-root p1c-overlay",
+        children: [
+          jsx("div", { className: "p1c-mask", onClick: onClose, "aria-hidden": "true" }),
+          jsxs("div", {
+            className: "p1c-dialog",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Параметры проекта " + project.title,
+            children: [
+              jsxs("div", {
+                className: "p1c-dialog__head",
+                children: [
+                  jsxs("div", {
+                    className: "p1c-dialog__headmain",
+                    children: [
+                      jsx("div", { className: "p1c-dialog__title", children: "Параметры проекта" }),
+                      jsx("div", { className: "p1c-dialog__project", children: project.title }),
+                      jsx("div", { className: "p1c-dialog__path p1c-mono", title: project.path, children: project.path }),
+                    ],
+                  }),
+                  jsx(Btn, {
+                    variant: "icon",
+                    title: "Закрыть",
+                    onClick: onClose,
+                    children: jsx(CloseIcon, {}),
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-dialog__body",
+                children: [
+                  jsx(Card, {
+                    title: "Подключение",
+                    hint: "Значения проекта лежат в " + state.paramsRel + " внутри его папки — их видно в git и можно править руками.",
+                    children: jsxs("div", {
+                      className: "p1c-grid",
+                      children: [
+                        jsx(Field, {
+                          wide: true,
+                          htmlFor: "p1c-infobase",
+                          label: "Путь к базе",
+                          hint: infoBaseHint,
+                          children: jsx("input", {
+                            id: "p1c-infobase",
+                            className: "p1c-input",
+                            list: INFOBASE_LIST_ID,
+                            autoFocus: true,
+                            value: form.infobasePath,
+                            placeholder: 'C:\\Базы\\Бухгалтерия  либо  Srvr="server";Ref="buh";',
+                            onChange: (e) => setForm((f) => ({ ...f, infobasePath: e.target.value })),
+                          }),
+                        }),
+                        jsx(Field, {
+                          htmlFor: "p1c-user",
+                          label: "Пользователь",
+                          children: jsx("input", {
+                            id: "p1c-user",
+                            className: "p1c-input",
+                            value: form.user,
+                            onChange: (e) => setForm((f) => ({ ...f, user: e.target.value })),
+                          }),
+                        }),
+                        jsx(Field, {
+                          htmlFor: "p1c-password",
+                          label: "Пароль",
+                          labelExtra: jsx(Check, {
+                            compact: true,
+                            checked: showPassword,
+                            onChange: (e) => setShowPassword(e.target.checked),
+                            children: "показать",
+                          }),
+                          hint: "Хранится открытым текстом — не коммитьте файл параметров.",
+                          children: jsx("input", {
+                            id: "p1c-password",
+                            className: "p1c-input",
+                            type: showPassword ? "text" : "password",
+                            value: form.password,
+                            onChange: (e) => setForm((f) => ({ ...f, password: e.target.value })),
+                          }),
+                        }),
+                        jsx(Field, {
+                          wide: true,
+                          htmlFor: "p1c-platform",
+                          label: "Путь к платформе 1С",
+                          hint: form.platformPath
+                            ? "Путь задан для этого проекта."
+                            : "Пусто — берётся общее значение: " + (state.common.platformPath || "не задано"),
+                          children: jsx("input", {
+                            id: "p1c-platform",
+                            className: "p1c-input",
+                            list: PLATFORM_LIST_ID,
+                            value: form.platformPath,
+                            placeholder: platformPlaceholder,
+                            onChange: (e) => setForm((f) => ({ ...f, platformPath: e.target.value })),
+                          }),
+                        }),
+                        jsx(Field, {
+                          htmlFor: "p1c-unlock",
+                          label: "Код доступа к базе",
+                          hint: "Нужен, если на базе стоит блокировка соединений (/UC).",
+                          children: jsx("input", {
+                            id: "p1c-unlock",
+                            className: "p1c-input",
+                            value: form.unlockCode,
+                            placeholder: "пусто — без кода",
+                            onChange: (e) => setForm((f) => ({ ...f, unlockCode: e.target.value })),
+                          }),
+                        }),
+                        jsx(Field, {
+                          htmlFor: "p1c-dumpdir",
+                          label: "Каталог выгрузки",
+                          hint: "Куда писать XML: абсолютный путь или путь внутри проекта.",
+                          children: jsx("input", {
+                            id: "p1c-dumpdir",
+                            className: "p1c-input",
+                            value: form.dumpDir,
+                            placeholder: "пусто — корень проекта",
+                            onChange: (e) => setForm((f) => ({ ...f, dumpDir: e.target.value })),
+                          }),
+                        }),
+                      ],
+                    }),
+                  }),
+
+                  jsx(Card, {
+                    title: "Выгрузка и загрузка конфигурации",
+                    hint: "Конфигуратор блокирует конфигурацию базы: одновременно выполняется одна операция.",
+                    children: jsxs("div", {
+                      className: "p1c-stack",
+                      children: [
+                        jsxs("div", {
+                          className: "p1c-options",
+                          children: [
+                            jsxs("label", {
+                              className: "p1c-check-row",
+                              children: [
+                                jsx("span", { className: "p1c-label", children: "Формат" }),
+                                jsxs("select", {
+                                  className: "p1c-select p1c-select--format",
+                                  value: runOptions.format,
+                                  disabled: running && jobIsHere,
+                                  onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
+                                  children: [
+                                    jsx("option", { value: "Hierarchical", children: "иерархический" }),
+                                    jsx("option", { value: "Plain", children: "плоский" }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                            jsx(Check, {
+                              checked: runOptions.update,
+                              disabled: running && jobIsHere,
+                              title: "Выгружать только изменившиеся объекты (DESIGNER -update -force)",
+                              onChange: (e) => setRunOptions((o) => ({ ...o, update: e.target.checked })),
+                              children: "только изменения",
+                            }),
+                            jsx(Check, {
+                              checked: runOptions.cleanLocks,
+                              disabled: running && jobIsHere,
+                              title: "Удалить lock-файлы .cfl файловой базы перед запуском",
+                              onChange: (e) => setRunOptions((o) => ({ ...o, cleanLocks: e.target.checked })),
+                              children: "снять .cfl перед запуском",
+                            }),
+                          ],
+                        }),
+                        jsxs("div", {
+                          className: "p1c-actions",
+                          children: [
+                            running && jobIsHere
+                              ? jsx(Btn, { variant: "danger", disabled: busy, onClick: onCancelDump, children: "Отменить операцию" })
+                              : jsx(Btn, {
+                                  variant: "primary",
+                                  disabled: operationsLocked || !canRun,
+                                  title: "DESIGNER /DumpConfigToFiles — выгрузить конфигурацию в файлы",
+                                  onClick: onStartDump,
+                                  children: "Выгрузить в файлы",
+                                }),
+                            // Кнопки видны всегда: скрывать их до сохранения пути к базе
+                            // значит прятать половину возможностей плагина. Недоступность
+                            // объясняет подпись ниже, а не исчезновение кнопки.
+                            jsx(Btn, {
+                              variant: "primary",
+                              disabled: operationsLocked || !canRun,
+                              onClick: onStartLoad,
+                              title: "DESIGNER /LoadConfigFromFiles — загрузить конфигурацию из каталога выгрузки в базу",
+                              children: "Загрузить из файлов",
+                            }),
+                            jsx(Btn, {
+                              variant: "primary",
+                              disabled: operationsLocked || !canRun,
+                              onClick: onStartExtensions,
+                              title: "DESIGNER /DumpConfigToFiles -AllExtensions — выгрузить все расширения базы в исходники",
+                              children: "Выгрузить расширения",
+                            }),
+                            !canRun
+                              ? jsx("span", { className: "p1c-note", children: "Сначала укажите путь к базе и нажмите «Сохранить»." })
+                              : null,
+                          ],
+                        }),
+                        jsxs("div", {
+                          className: "p1c-stack p1c-stack--tight",
+                          children: [
+                            jsxs("div", {
+                              className: "p1c-options",
+                              children: [
+                                jsx(Check, {
+                                  checked: loadOptions.updateDb,
+                                  disabled: running && jobIsHere,
+                                  title: "DESIGNER /UpdateDBCfg",
+                                  onChange: (e) => setLoadOptions((o) => ({ ...o, updateDb: e.target.checked })),
+                                  children: "обновить конфигурацию базы данных",
+                                }),
+                                jsx(Check, {
+                                  checked: loadOptions.dynamic,
+                                  disabled: (running && jobIsHere) || !loadOptions.updateDb,
+                                  title: "DESIGNER -Dynamic+ -SessionTerminate force",
+                                  onChange: (e) => setLoadOptions((o) => ({ ...o, dynamic: e.target.checked })),
+                                  children: "динамически, без выхода пользователей",
+                                }),
+                              ],
+                            }),
+                            jsx("div", {
+                              className: "p1c-note",
+                              children: loadOptions.updateDb
+                                ? loadOptions.dynamic
+                                  ? "Загрузка заменит конфигурацию базы; обновление пойдёт динамически — сеансы не прерываются, но структурные изменения могут потребовать нединамического обновления."
+                                  : "Загрузка заменит конфигурацию базы; нединамическое обновление требует выхода всех пользователей."
+                                : "Конфигурация базы не обновится: изменения останутся только в конфигурации (для применения нужен отдельный вызов /UpdateDBCfg).",
+                            }),
+                            jsx("div", {
+                              className: "p1c-note",
+                              children: "Источник — каталог выгрузки: " + (form.dumpDir || "корень проекта") +
+                                ". Каталог без Configuration.xml плагин грузить откажется; расширения идут в подпапку Extensions.",
+                            }),
+                          ],
+                        }),
+                        jobBlock,
+                      ],
+                    }),
+                  }),
+
+                  jsx(Card, {
+                    title: "Правила 1С в проекте",
+                    children: jsxs("div", {
+                      className: "p1c-stack",
+                      children: [
+                        jsxs("div", {
+                          className: "p1c-status",
+                          children: [
+                            jsx(Dot, { className: "p1c-status__dot", tone: rulesStatus.tone || undefined }),
+                            jsxs("div", {
+                              children: [
+                                jsx("div", {
+                                  className: rulesStatus.tone ? "p1c-text--" + rulesStatus.tone : undefined,
+                                  children: rulesStatus.text,
+                                }),
+                                rulesStatus.detail
+                                  ? jsx("div", { className: "p1c-note", children: rulesStatus.detail })
+                                  : null,
+                              ],
+                            }),
+                          ],
+                        }),
+                        rulesDriftCount > 0
+                          ? jsx("div", {
+                              className: "p1c-note p1c-note--warn",
+                              children: "Файлов с вашими правками или удалённых: " + rulesDriftCount +
+                                " — они не перезаписываются и останутся при удалении правил.",
+                            })
+                          : null,
+                        jsxs("div", {
+                          className: "p1c-actions",
+                          children: [
+                            jsx(Btn, {
+                              variant: "primary",
+                              disabled: busy || (rulesPayload && rulesPayload.ok === false),
+                              onClick: () => onRulesDeploy(false),
+                              children: rulesDeployed ? "Обновить правила" : "Развернуть правила",
+                            }),
+                            jsx(Btn, {
+                              disabled: busy,
+                              title: "Прогнать развёртывание «вхолостую»: плагин посчитает, что будет записано, сохранено и удалено, но ничего не тронет на диске",
+                              onClick: () => onRulesDeploy(true),
+                              children: "Проверить без записи",
+                            }),
+                            rulesDeployed
+                              ? jsx(Btn, { variant: "danger", disabled: busy, onClick: onRulesRemove, children: "Убрать правила" })
+                              : null,
+                          ],
+                        }),
+                        jsxs("div", {
+                          className: "p1c-options",
+                          children: [
+                            jsx(Check, {
+                              checked: rulesOptions.useEdt,
+                              disabled: busy,
+                              onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
+                              children: "в проекте используется 1С:EDT",
+                            }),
+                            jsx(Check, {
+                              checked: rulesOptions.includePassword,
+                              disabled: busy,
+                              title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
+                              onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
+                              children: "записать пароль базы в .dev.env",
+                            }),
+                          ],
+                        }),
+                        jsx("div", {
+                          className: "p1c-note",
+                          children: "Разворачивается весь набор: 48 правил, 13 ролей, 30 сценариев, навыки, OpenSpec и точка входа " +
+                            "AGENTS.md. Ссылки content/rules/… переписываются на проектные пути; существующий AGENTS.md сохраняется " +
+                            "как AGENTS.md.bak.md и вклеивается в USER-RULES.md, а .dev.env и openspec/ не перезаписываются.",
+                        }),
+                        rulesResultBlock
+                          ? jsxs("details", {
+                              className: "p1c-details",
+                              open: true,
+                              children: [
+                                jsx(Summary, { children: "Результат последнего запуска" }),
+                                jsx("div", { className: "p1c-details__body", children: rulesResultBlock }),
+                              ],
+                            })
+                          : null,
+                      ],
+                    }),
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-dialog__foot",
+                children: [
+                  jsxs("div", {
+                    className: "p1c-dialog__footleft",
+                    children: [
+                      jsx(Btn, {
+                        variant: "danger",
+                        disabled: busy || !project.hasFile,
+                        title: "Удалить " + project.filePath,
+                        onClick: onClear,
+                        children: "Удалить файл",
+                      }),
+                      project.source === "extra"
+                        ? jsx(Btn, { variant: "danger", disabled: busy, onClick: onForget, children: "Убрать из списка" })
+                        : null,
+                    ],
+                  }),
+                  jsxs("div", {
+                    className: "p1c-dialog__footright",
+                    children: [
+                      jsx(Btn, { onClick: onClose, children: "Закрыть" }),
+                      jsx(Btn, { variant: "primary", disabled: busy, onClick: onSave, children: "Сохранить" }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }));
     }
 
     function Section() {
@@ -432,6 +901,12 @@ window.__ModuleLoader__.load({
       const [newPath, setNewPath] = useState("");
       const [job, setJob] = useState(null);
       const [runOptions, setRunOptions] = useState(EMPTY_RUN);
+      const [loadOptions, setLoadOptions] = useState(EMPTY_LOAD);
+      const [rulesInfo, setRulesInfo] = useState(null);
+      const [rulesResult, setRulesResult] = useState(null);
+      const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
+
+      injectStyles();
 
       const load = useCallback(async () => {
         try {
@@ -562,10 +1037,108 @@ window.__ModuleLoader__.load({
         run(async () => {
           const data = await request("/dump-cancel", { method: "POST", body: JSON.stringify({ path: project ? project.path : "" }) });
           setJob(data.job);
-        }, "Выгрузка отменена");
+        }, "Операция отменена");
+
+      // Обратная загрузка конфигурации: заменяет конфигурацию базы, поэтому
+      // подтверждение обязательно и с прямым перечислением последствий.
+      const startLoad = () => {
+        if (!project) return;
+        const dir = form.dumpDir || "корень проекта";
+        const question =
+          "Загрузить конфигурацию из файлов в базу проекта «" + project.title + "»?\n\n" +
+          "Источник: " + dir + " (файл Configuration.xml в нём обязателен).\n" +
+          "Текущая конфигурация базы будет заменена содержимым каталога — отменить это нельзя.\n" +
+          (loadOptions.updateDb
+            ? (loadOptions.dynamic
+              ? "Конфигурация базы будет обновлена динамически."
+              : "ВНИМАНИЕ: нединамическое обновление требует выхода всех пользователей из базы.")
+            : "Конфигурация базы обновляться не будет.");
+        if (typeof window !== "undefined" && !window.confirm(question)) return;
+        run(async () => {
+          const data = await request("/load-start", {
+            method: "POST",
+            body: JSON.stringify({
+              path: project.path,
+              dir: form.dumpDir,
+              format: runOptions.format,
+              updateDb: loadOptions.updateDb,
+              dynamic: loadOptions.dynamic,
+              cleanLocks: runOptions.cleanLocks,
+            }),
+          });
+          setJob(data.job);
+        }, "Загрузка запущена");
+      };
+
+      // Расширения кладём отдельной папкой рядом с конфигурацией: -AllExtensions
+      // в общем каталоге смешал бы объекты расширений с объектами конфигурации.
+      const startExtensions = () => {
+        if (!project) return;
+        const dir = form.dumpDir ? form.dumpDir + "\\Extensions" : "корень проекта\\Extensions";
+        const question =
+          "Выгрузить все расширения базы проекта «" + project.title + "» в исходники?\n\n" +
+          "Каталог: " + dir + "\n" +
+          "Конфигуратор выполнит /DumpConfigToFiles с ключом -AllExtensions. " +
+          "Существующие исходники расширений в этом каталоге будут перезаписаны.";
+        if (typeof window !== "undefined" && !window.confirm(question)) return;
+        run(async () => {
+          const data = await request("/extensions-start", {
+            method: "POST",
+            body: JSON.stringify({ path: project.path, dir: form.dumpDir, cleanLocks: runOptions.cleanLocks }),
+          });
+          setJob(data.job);
+        }, "Выгрузка расширений запущена");
+      };
+
+      // ── правила 1С в проекте ───────────────────────────────────────────────
+      const loadRules = useCallback(async (path) => {
+        if (!path) {
+          setRulesInfo(null);
+          return;
+        }
+        try {
+          const data = await request("/rules-status?path=" + encodeURIComponent(path));
+          setRulesInfo(data);
+        } catch (error) {
+          setRulesInfo({ error: String((error && error.message) || error) });
+        }
+      }, []);
+
+      useEffect(() => {
+        setRulesResult(null);
+        loadRules(openPath);
+      }, [openPath, loadRules]);
+
+      const deployRulesTo = (dryRun) =>
+        run(async () => {
+          const body = {
+            path: project.path,
+            includePassword: rulesOptions.includePassword,
+            useEdt: rulesOptions.useEdt,
+            dryRun,
+          };
+          const data = await request("/rules-deploy", { method: "POST", body: JSON.stringify(body) });
+          setRulesResult(data);
+          if (!dryRun) await loadRules(project.path);
+        }, dryRun ? "Проверка выполнена — ничего не записано" : "Правила развёрнуты в проект");
+
+      const removeRulesFrom = () => {
+        if (!project) return;
+        const question =
+          "Убрать развёрнутые правила из проекта «" + project.title + "»?\n\n" +
+          "Будут удалены AGENTS.md (точка входа), .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, " +
+          ".dsh/skills и openspec/. Файлы с вашими правками останутся, USER-RULES.md, memory.md " +
+          "и LLM-RULES.md тоже сохраняются; прежний AGENTS.md вернётся из AGENTS.md.bak.md.";
+        if (typeof window !== "undefined" && !window.confirm(question)) return;
+        run(async () => {
+          const data = await request("/rules-remove", { method: "POST", body: JSON.stringify({ path: project.path }) });
+          setRulesResult(data);
+          await loadRules(project.path);
+        }, "Правила убраны из проекта");
+      };
 
       if (state === null) {
-        return jsx("div", { style: { opacity: 0.7 }, children: status ? status.text : "Загрузка параметров…" });
+        return jsx("div", { className: "p1c-root", children: jsx("div", { className: "p1c-note", children: status ? status.text : "Загрузка параметров…" }) });
       }
 
       const projects = state.projects || [];
@@ -575,7 +1148,7 @@ window.__ModuleLoader__.load({
       const infoBaseHint = (() => {
         const parts = [
           infoBases.length
-            ? "Из списка баз 1С подставлено: " + infoBases.length + " — начните вводить имя базы или выберите из списка."
+            ? "Из списка баз 1С подставлено: " + infoBases.length + "."
             : "Список баз 1С (ibases.v8i) не найден — путь вводится вручную.",
         ];
         if (state.infobasesWebSkipped) parts.push("Базы через веб-сервер пропущены: " + state.infobasesWebSkipped + ".");
@@ -583,34 +1156,46 @@ window.__ModuleLoader__.load({
       })();
 
       const statusLine = status
-        ? jsx("div", {
-            style: { fontSize: 12, color: status.kind === "ok" ? "#4caf50" : "#e57373" },
-            children: status.text,
+        ? jsxs("div", {
+            className: "p1c-status",
+            children: [
+              jsx(Dot, { className: "p1c-status__dot", tone: status.kind === "ok" ? "ok" : "err" }),
+              jsx("div", {
+                className: cx("p1c-sm", status.kind === "ok" ? "p1c-text--ok" : "p1c-text--err"),
+                children: status.text,
+              }),
+            ],
           })
         : null;
 
       const jobStrip = job && job.state !== "idle"
-        ? jsxs("div", {
-            style: {
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              fontSize: 12,
-              border: "1px solid var(--dsw-alias-border-l2)",
-              borderRadius: 10,
-              padding: "8px 12px",
-            },
-            children: [
-              jsx("span", { style: { fontWeight: 600, color: JOB_COLOR[job.state] || "inherit" }, children: JOB_LABEL[job.state] || job.state }),
-              jsx("span", { style: { opacity: 0.7 }, children: "«" + job.title + "» · " + Math.round((job.elapsedMs || 0) / 1000) + " с" + (job.files ? " · файлов: " + job.files : "") }),
-              state.projects.some((p) => p.path === job.path)
-                ? jsx("button", { type: "button", style: styles.secondaryButton, onClick: () => setOpenPath(job.path), children: "Открыть" })
-                : null,
-              job.state === "running"
-                ? jsx("button", { type: "button", style: styles.dangerButton, disabled: busy, onClick: cancelDump, children: "Отменить" })
-                : null,
-            ],
+        ? jsxs(Card, {
+            children: jsxs("div", {
+              className: "p1c-actions",
+              children: [
+                jsx(Dot, { tone: JOB_TONE[job.state] || undefined }),
+                jsxs("div", {
+                  className: "p1c-actions__grow",
+                  children: [
+                    jsx("div", {
+                      className: cx("p1c-sm p1c-strong", JOB_TONE[job.state] && "p1c-text--" + JOB_TONE[job.state]),
+                      children: (JOB_LABEL[job.state] || job.state) + (job.label ? " · " + job.label : ""),
+                    }),
+                    jsx("div", {
+                      className: "p1c-note",
+                      children: "«" + job.title + "» · " + Math.round((job.elapsedMs || 0) / 1000) + " с" +
+                        (job.counts && job.files ? " · файлов: " + job.files : ""),
+                    }),
+                  ],
+                }),
+                state.projects.some((p) => p.path === job.path)
+                  ? jsx(Btn, { onClick: () => setOpenPath(job.path), children: "Открыть" })
+                  : null,
+                job.state === "running"
+                  ? jsx(Btn, { variant: "danger", disabled: busy, onClick: cancelDump, children: "Отменить" })
+                  : null,
+              ],
+            }),
           })
         : null;
 
@@ -624,83 +1209,152 @@ window.__ModuleLoader__.load({
             setShowPassword,
             runOptions,
             setRunOptions,
+            loadOptions,
+            setLoadOptions,
             job,
             busy,
             infoBaseHint,
             platformPlaceholder,
             infoBases,
             platforms,
+            rulesInfo,
+            rulesResult,
+            rulesOptions,
+            setRulesOptions,
+            onRulesDeploy: deployRulesTo,
+            onRulesRemove: removeRulesFrom,
             onSave: saveProject,
             onClear: clearProject,
             onForget: forgetProject,
             onStartDump: startDump,
+            onStartLoad: startLoad,
+            onStartExtensions: startExtensions,
             onCancelDump: cancelDump,
             onClose: () => setOpenPath(null),
           })
         : null;
 
-      return jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 14 }, children: [
-        jsxs("div", { children: [
-          jsx("div", { style: { fontSize: 14, fontWeight: 600 }, children: "1С: Параметры проектов" }),
-          jsx("div", { style: styles.subtitle, children: "Значения каждого проекта лежат в файле " + state.paramsRel + " внутри его папки — их видно в git, можно править руками и читать другими инструментами." }),
-        ]}),
-        statusLine,
-        jobStrip,
-        jsxs("div", { style: styles.card, children: [
-          jsx("div", { style: styles.cardTitle, children: "Общие — значения по умолчанию" }),
-          jsxs("div", { style: { display: "flex", gap: 8, alignItems: "flex-start" }, children: [
-            jsxs("div", { style: { flex: "1 1 auto", minWidth: 0 }, children: [
-              jsx("div", { style: styles.fieldLabel, children: "Путь к платформе 1С" }),
-              jsx("input", {
-                style: styles.input,
-                list: PLATFORM_LIST_ID,
-                value: commonPlatform,
-                placeholder: "C:\\Program Files\\1cv8\\8.3.27.2130\\bin\\1cv8.exe",
-                onChange: (e) => setCommonPlatform(e.target.value),
+      return jsxs("div", {
+        className: "p1c-root",
+        children: [
+          jsxs("div", {
+            children: [
+              jsx("div", { className: "p1c-title", children: "1С: Параметры проектов" }),
+              jsx("div", {
+                className: "p1c-subtitle",
+                children: "Значения проекта лежат в " + state.paramsRel + " внутри его папки — их видно в git, можно править руками и читать другими инструментами.",
               }),
-              jsx("div", { style: styles.hint, children: platforms.length
-                ? "Найдено платформ: " + platforms.length + " — начните вводить путь или выберите из списка."
-                : "Установленные платформы не найдены в стандартных каталогах — укажите путь вручную." }),
-            ]}),
-            jsx("button", { type: "button", style: styles.primaryButton, disabled: busy, onClick: saveCommon, children: "Сохранить" }),
-          ]}),
-        ]}),
-        jsxs("div", { style: styles.card, children: [
-          jsx("div", { style: styles.cardTitle, children: "Проекты (" + projects.length + ")" }),
-          projects.length === 0
-            ? jsx("div", { style: styles.hint, children: "В DSH не зарегистрировано ни одного воркспейса. Добавьте путь к папке проекта ниже." })
-            : jsx("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: projects.map((p) =>
+            ],
+          }),
+          statusLine,
+          jobStrip,
+          jsx(Card, {
+            title: "Общие значения",
+            hint: "Действуют для проектов, где своё значение не задано.",
+            children: jsxs("div", {
+              className: "p1c-field",
+              children: [
+                jsx("div", {
+                  className: "p1c-label-row",
+                  children: jsx("label", {
+                    className: "p1c-label",
+                    htmlFor: "p1c-common-platform",
+                    children: "Путь к платформе 1С",
+                  }),
+                }),
                 jsxs("div", {
-                  key: p.path,
-                  role: "button",
-                  tabIndex: 0,
-                  title: "Открыть параметры проекта",
-                  onClick: () => setOpenPath(p.path),
-                  style: styles.row,
+                  className: "p1c-actions",
                   children: [
-                    jsxs("div", { style: styles.rowTop, children: [
-                      jsx("span", { style: styles.rowTitle, children: p.title }),
-                      jsx("span", { style: { opacity: 0.6, fontSize: 10, flex: "0 0 auto" }, children: p.hasFile ? "●" : "○" }),
-                      jsx("span", { style: { opacity: 0.6, flex: "0 0 auto", display: "flex" }, children: gearIcon() }),
-                    ]}),
-                    jsx("div", { style: { ...styles.path, opacity: 0.5, wordBreak: "normal", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: p.path }),
+                    jsx("div", {
+                      className: "p1c-actions__grow",
+                      children: jsx("input", {
+                        id: "p1c-common-platform",
+                        className: "p1c-input",
+                        list: PLATFORM_LIST_ID,
+                        value: commonPlatform,
+                        placeholder: "C:\\Program Files\\1cv8\\8.3.27.2130\\bin\\1cv8.exe",
+                        onChange: (e) => setCommonPlatform(e.target.value),
+                      }),
+                    }),
+                    jsx(Btn, { variant: "primary", disabled: busy, onClick: saveCommon, children: "Сохранить" }),
                   ],
-                }, p.path)) }),
-          jsxs("div", { style: { display: "flex", gap: 6, marginTop: 2 }, children: [
-            jsx("input", {
-              style: styles.input,
-              value: newPath,
-              placeholder: "D:\\путь\\к\\проекту",
-              onChange: (e) => setNewPath(e.target.value),
+                }),
+                jsx("div", {
+                  className: "p1c-note",
+                  children: platforms.length
+                    ? "Найдено платформ: " + platforms.length + " — начните вводить путь или выберите из списка."
+                    : "Установленные платформы не найдены в стандартных каталогах — укажите путь вручную.",
+                }),
+              ],
             }),
-            jsx("button", { type: "button", style: styles.secondaryButton, disabled: busy || !newPath.trim(), onClick: addProject, children: "Добавить" }),
-          ]}),
-          jsx("div", { style: styles.hint, children: "● — файл параметров есть, ○ — ещё не создан. Параметры открываются по клику на проект." }),
-        ]}),
-        jsx("datalist", { id: PLATFORM_LIST_ID, children: platforms.map((p) => jsx("option", { key: p.path, value: p.path, children: p.version })) }),
-        jsx("datalist", { id: INFOBASE_LIST_ID, children: infoBases.map((b) => jsx("option", { key: b.value, value: b.value, children: b.name })) }),
-        dialog,
-      ]});
+          }),
+          jsx(Card, {
+            title: "Проекты (" + projects.length + ")",
+            hint: "Параметры открываются по клику на проект.",
+            children: jsxs("div", {
+              className: "p1c-stack",
+              children: [
+                projects.length === 0
+                  ? jsx("div", { className: "p1c-note", children: "В DSH не зарегистрировано ни одного воркспейса. Добавьте путь к папке проекта ниже." })
+                  : jsxs("div", {
+                      className: "p1c-stack p1c-stack--tight",
+                      children: projects.map((p) =>
+                        jsxs("button", {
+                          key: p.path,
+                          type: "button",
+                          className: "p1c-project",
+                          title: "Открыть параметры проекта",
+                          onClick: () => setOpenPath(p.path),
+                          children: [
+                            jsxs("span", {
+                              className: "p1c-project__main",
+                              children: [
+                                jsx("span", { className: "p1c-project__name", children: p.title }),
+                                jsx("span", { className: "p1c-project__path p1c-mono", children: p.path }),
+                              ],
+                            }),
+                            p.rules && p.rules.deployed
+                              ? jsx("span", {
+                                  className: "p1c-badge",
+                                  title: "Правила 1С развёрнуты: " + (p.rules.version || "версия неизвестна") + ", файлов: " + p.rules.files,
+                                  children: "правила",
+                                })
+                              : null,
+                            jsx(Dot, {
+                              title: p.hasFile ? "Файл параметров есть" : "Файл параметров ещё не создан",
+                              tone: p.hasFile ? "ok" : undefined,
+                            }),
+                            jsx("span", { className: "p1c-chevron", children: jsx(ChevronIcon, {}) }),
+                          ],
+                        }),
+                      ),
+                    }),
+                jsxs("div", {
+                  className: "p1c-actions",
+                  children: [
+                    jsx("div", {
+                      className: "p1c-actions__grow",
+                      children: jsx("input", {
+                        className: "p1c-input",
+                        value: newPath,
+                        placeholder: "D:\\путь\\к\\проекту",
+                        onChange: (e) => setNewPath(e.target.value),
+                        onKeyDown: (e) => {
+                          if (e.key === "Enter") addProject();
+                        },
+                      }),
+                    }),
+                    jsx(Btn, { disabled: busy || !newPath.trim(), onClick: addProject, children: "Добавить проект" }),
+                  ],
+                }),
+              ],
+            }),
+          }),
+          jsx("datalist", { id: PLATFORM_LIST_ID, children: platforms.map((p) => jsx("option", { key: p.path, value: p.path, children: p.version })) }),
+          jsx("datalist", { id: INFOBASE_LIST_ID, children: infoBases.map((b) => jsx("option", { key: b.value, value: b.value, children: b.name })) }),
+          dialog,
+        ],
+      });
     }
 
     function apply(ctx) {
