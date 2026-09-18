@@ -15,6 +15,14 @@ import {
   readPayload,
   removeRules,
 } from "./rules-deploy.js";
+import {
+  PLATFORM_CONTEXT_SERVER,
+  platformContextExe,
+  platformContextStatus,
+  restartPlatformContext,
+  startPlatformContext,
+  stopPlatformContext,
+} from "./platform-context.js";
 
 export const name = "dsh-1c-project-properties";
 
@@ -914,7 +922,152 @@ function describePayload() {
   };
 }
 
+// ── платформенный контекст (MCP) ────────────────────────────────────────────
+//
+// Справку по API платформы агенту отдаёт внешний сервер из vendor/bsl-context-rs
+// (MIT): плагин владеет его жизненным циклом, а маршрут к нему отдаёт
+// MCP-менеджеру через ctx.mcpManager.registerServer — поэтому сервер виден в
+// панели менеджера и его инструменты приходят агенту как mcp__1c-platform-context__*.
+//
+// Путь к платформе — общее значение из настроек, то же, что у выгрузки
+// конфигурации. Пока оно пустое, сервер поднят, но менеджеру не отдан: справка
+// без индекса отвечает отказом, и держать её в списке инструментов незачем.
+
+const PLATFORM_CONTEXT_DATA_DIR = join(DSH_HOME, "1c-platform-context");
+
+/** Мост к MCP-менеджеру: он приходит и уходит отдельно от плагина. */
+const managerBridge = { service: null, url: "", registered: false };
+
+/** Очередь запусков: смена пути не должна теряться в уже идущем запуске. */
+let platformContextQueue = Promise.resolve();
+
+function managerService() {
+  return managerBridge.service;
+}
+
+/** Готовый сервер — в менеджер; неготовый — снять оттуда. */
+async function publishPlatformContext(status) {
+  const service = managerService();
+  if (!service) return;
+  const wanted = status.running && status.indexLoaded && status.url ? status.url : "";
+
+  if (!wanted) {
+    if (!managerBridge.registered) return;
+    managerBridge.registered = false;
+    managerBridge.url = "";
+    await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+    return;
+  }
+  if (managerBridge.registered && managerBridge.url === wanted) {
+    // Менеджер мог исчерпать свои попытки переподключения, пока индекс собирался.
+    const current = service.getStatus(PLATFORM_CONTEXT_SERVER);
+    if (current && current.status !== "connected") await service.reconnect(PLATFORM_CONTEXT_SERVER);
+    return;
+  }
+  if (managerBridge.registered) {
+    managerBridge.registered = false;
+    await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+  }
+  await service.registerServer({
+    name: PLATFORM_CONTEXT_SERVER,
+    transport: "streamable-http",
+    url: wanted,
+    description:
+      "Справка по API платформы 1С из установленной версии: типы, методы, свойства, " +
+      "конструкторы, значения перечислений и проверка BSL-кода против платформы.",
+  });
+  managerBridge.registered = true;
+  managerBridge.url = wanted;
+}
+
+/** Снять сервер с учёта в менеджере (если он там был). */
+async function withdrawPlatformContext() {
+  const service = managerService();
+  if (!service || !managerBridge.registered) return;
+  managerBridge.registered = false;
+  managerBridge.url = "";
+  await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+}
+
+/** Запуск (или перезапуск) сервера под действующий путь к платформе. */
+function ensurePlatformContext({ restart = false } = {}) {
+  const run = async () => {
+    const common = readCommon();
+    const platform = resolvePlatform(common.platformPath);
+    const dir = platform.exe ? platform.cwd : "";
+    const result = restart
+      ? await restartPlatformContext({ dataDir: PLATFORM_CONTEXT_DATA_DIR, platformPath: dir })
+      : await startPlatformContext({ dataDir: PLATFORM_CONTEXT_DATA_DIR, platformPath: dir });
+    if (!platform.exe) result.pathError = platform.error;
+    try {
+      await publishPlatformContext(result);
+    } catch (error) {
+      result.managerError = error?.message || String(error);
+    }
+    return result;
+  };
+  // Запуски идут по очереди: «start без пути» при apply и «restart после смены
+  // пути» — не конкуренты, и второй обязан случиться, даже если первый ещё идёт.
+  const job = platformContextQueue.then(run, run);
+  platformContextQueue = job.then(
+    () => {},
+    () => {},
+  );
+  return job;
+}
+
+function describePlatformContext() {
+  const common = readCommon();
+  const platform = resolvePlatform(common.platformPath);
+  return {
+    ...platformContextStatus(),
+    exe: platformContextExe(),
+    platformError: platform.exe ? "" : platform.error,
+    managerAvailable: Boolean(managerService()),
+    managerRegistered: managerBridge.registered,
+  };
+}
+
 export function apply(ctx) {
+  // Сервер справки поднимается сразу: путь к платформе может быть ещё не задан,
+  // и это штатное состояние первой установки, а не ошибка.
+  ctx.inject(["mcpManager"], (mctx) => {
+    managerBridge.service = mctx.get("mcpManager") ?? null;
+    ensurePlatformContext().catch(() => {});
+    mctx.on("dispose", () => {
+      // Снимаем сервер с учёта, пока держим сервис: у приложения на выходе
+      // порядок dispose у нашего и менеджерского плагина не гарантирован.
+      Promise.resolve(withdrawPlatformContext()).catch(() => {});
+      managerBridge.service = null;
+    });
+  });
+  ensurePlatformContext().catch(() => {});
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/platform-context",
+    handler: (_req, res) => {
+      try {
+        json(res, 200, { ok: true, version: 1, ...describePlatformContext() });
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/platform-context-restart",
+    handler: async (_req, res) => {
+      try {
+        const result = await ensurePlatformContext({ restart: true });
+        json(res, result.ok ? 200 : 400, { ok: result.ok, ...describePlatformContext(), error: result.error });
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
   ctx.webServer.register({
     kind: "exact",
     path: ROUTE + "/state",
@@ -933,6 +1086,7 @@ export function apply(ctx) {
           infobasesWebSkipped: infobases.webSkipped,
           infobasesSources: infobases.sources,
           rulesPayload: describePayload(),
+          platformContext: describePlatformContext(),
         });
       } catch (error) {
         json(res, 500, { ok: false, error: error?.message || String(error) });
@@ -948,8 +1102,14 @@ export function apply(ctx) {
       try {
         const body = JSON.parse((await readBody(req)) || "{}");
         const common = readCommon();
+        const previousPlatform = common.platformPath;
         if (typeof body?.platformPath === "string") common.platformPath = body.platformPath.trim();
         writeCommon(common);
+        if (common.platformPath !== previousPlatform) {
+          // Сервер справки читает каталог платформы при старте — меняем путь делом,
+          // а не только на словах. Ответ на запрос ждать этого не должен.
+          ensurePlatformContext({ restart: true }).catch(() => {});
+        }
         json(res, 200, { ok: true, common });
       } catch (error) {
         json(res, 400, { ok: false, error: error?.message || String(error) });
@@ -1146,7 +1306,7 @@ export function apply(ctx) {
     },
   });
 
-  // Уходя, не оставляем висящий Конфигуратор.
+  // Уходя, не оставляем висящий Конфигуратор и не держим порт справки.
   ctx.on("dispose", () => {
     if (dumpJob?.state === "running" && dumpJob.child) {
       try {
@@ -1155,5 +1315,7 @@ export function apply(ctx) {
       dumpJob.state = "cancelled";
       dumpJob.finishedAt = Date.now();
     }
+    stopPlatformContext();
+    Promise.resolve(withdrawPlatformContext()).catch(() => {});
   });
 }

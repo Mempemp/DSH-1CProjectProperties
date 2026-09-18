@@ -932,6 +932,7 @@ window.__ModuleLoader__.load({
       const [rulesResult, setRulesResult] = useState(null);
       const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
       const [opError, setOpError] = useState(null);
+      const [platformCtx, setPlatformCtx] = useState(null);
 
       injectStyles();
 
@@ -940,6 +941,7 @@ window.__ModuleLoader__.load({
           const data = await request("/state");
           setState(data);
           setCommonPlatform(data.common ? data.common.platformPath || "" : "");
+          setPlatformCtx(data.platformContext || null);
         } catch (error) {
           setStatus({ kind: "error", text: String((error && error.message) || error) });
         }
@@ -992,6 +994,17 @@ window.__ModuleLoader__.load({
           await request("/common", { method: "POST", body: JSON.stringify({ platformPath: commonPlatform }) });
           await load();
         }, "Общие настройки сохранены");
+
+      // Перезапуск сервера справки: индекс платформы собирается при старте,
+      // поэтому ответ приходит не мгновенно — на это время кнопка занята.
+      const restartPlatformContext = () =>
+        run(async () => {
+          try {
+            await request("/platform-context-restart", { method: "POST" });
+          } finally {
+            await load();
+          }
+        }, "Сервер справки перезапущен");
 
       const saveProject = () => {
         if (!project) return;
@@ -1194,6 +1207,53 @@ window.__ModuleLoader__.load({
           })
         : null;
 
+      // Платформенный контекст: сервер справки для агента. Показываем то, что
+      // происходит на самом деле: путь может быть ещё не задан, и это не ошибка.
+      const platformCtxCard = (() => {
+        const info = platformCtx || {};
+        const tone = info.indexLoaded ? "ok" : info.running ? "warn" : undefined;
+        const label = info.indexLoaded
+          ? "Работает: справка отдаётся агенту"
+          : info.running
+            ? "Запущен, индекс платформы не собран"
+            : "Не запущен";
+        const stats = info.indexStats || {};
+        const details = [
+          info.platformError || "",
+          info.error || "",
+          info.indexLoaded
+            ? "В индексе: типов " + (stats.types || 0) + ", перечислений " + (stats.enum_types || 0) + "."
+            : "",
+          info.url
+            ? "Адрес: " + info.url + (info.managerRegistered ? " — отдан MCP-менеджеру." : " — менеджеру не отдан.")
+            : "",
+          info.version ? "Версия сервера: " + info.version + "." : "",
+        ].filter(Boolean).join(" ");
+        return jsx(Card, {
+          title: "Платформенный контекст (MCP)",
+          hint: "Справка по API установленной платформы для агента. Путь берётся из общих значений выше.",
+          children: jsxs("div", {
+            className: "p1c-field",
+            children: [
+              jsxs("div", {
+                className: "p1c-label-row",
+                children: [
+                  jsxs("div", {
+                    className: "p1c-status",
+                    children: [
+                      jsx(Dot, { className: "p1c-status__dot", tone }),
+                      jsx("span", { className: "p1c-sm", children: label }),
+                    ],
+                  }),
+                  jsx(Btn, { disabled: busy, onClick: restartPlatformContext, children: "Перезапустить" }),
+                ],
+              }),
+              details ? jsx("div", { className: "p1c-note", children: details }) : null,
+            ],
+          }),
+        });
+      })();
+
       const dialog = project
         ? jsx(ProjectDialog, {
             project,
@@ -1283,6 +1343,7 @@ window.__ModuleLoader__.load({
               ],
             }),
           }),
+          platformCtxCard,
           jsx(Card, {
             title: "Проекты (" + projects.length + ")",
             hint: "Параметры открываются по клику на проект.",
