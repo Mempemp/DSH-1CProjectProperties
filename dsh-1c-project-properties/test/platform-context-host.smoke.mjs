@@ -125,18 +125,13 @@ console.log("первая установка: путь к платформе н�
 check("роут статуса зарегистрирован", routes.has("/1cprops/platform-context"));
 check("роут перезапуска зарегистрирован", routes.has("/1cprops/platform-context-restart"));
 
-const first = await waitFor(
-  async () => {
-    const status = await callRoute("/1cprops/platform-context");
-    return { done: status.json.running === true, status: status.json };
-  },
-  30_000,
-);
-check("сервер поднят без пути", first.status?.running === true, first.status?.error);
-check("индекс не собран", first.status?.indexLoaded === false);
-check("менеджеру сервер не отдан", first.status?.managerRegistered === false);
+// Пустой путь: процесс не поднимаем вовсе — ждать нечего, статус отвечает сразу.
+const idle = await callRoute("/1cprops/platform-context");
+check("сервер не поднят", idle.json.running === false, String(idle.json.error || ""));
+check("статус помечает пустой путь", idle.json.pathMissing === true);
+check("менеджеру сервер не отдан", idle.json.managerRegistered === false);
 check("менеджер не получал регистраций", managerCalls.length === 0, JSON.stringify(managerCalls));
-check("статус объясняет, чего не хватает", String(first.status?.platformError || "").includes("не задан"));
+check("статус объясняет, чего не хватает", String(idle.json.platformError || "").includes("не задан"));
 
 const platform = findPlatform();
 if (!platform) {
@@ -163,12 +158,40 @@ if (!platform) {
   const stateRoute = await callRoute("/1cprops/state");
   check("общий роут состояния несёт статус справки", stateRoute.json.platformContext?.running === true);
 
+  console.log("путь очищен");
+  const unregistersBefore = managerCalls.filter((call) => call.method === "unregisterServer").length;
+  const cleared = await callRoute("/1cprops/common", { platformPath: "" });
+  check("путь очищен", cleared.code === 200 && cleared.json.common.platformPath === "");
+  const idled = await waitFor(async () => {
+    const status = await callRoute("/1cprops/platform-context");
+    return { done: status.json.running === false && status.json.managerRegistered === false, status: status.json };
+  }, 30_000);
+  check("сервер погашен после очистки пути", idled.status?.running === false, JSON.stringify(idled.status));
+  check("пустой путь снова помечен", idled.status?.pathMissing === true);
+  check(
+    "менеджер получил снятие с учёта",
+    managerCalls.filter((call) => call.method === "unregisterServer").length > unregistersBefore,
+  );
+
+  console.log("путь задан заново");
+  const armed = await callRoute("/1cprops/common", { platformPath: join(platform, "1cv8.exe") });
+  check("путь сохранён повторно", armed.code === 200);
+  const relived = await waitFor(async () => {
+    const status = await callRoute("/1cprops/platform-context");
+    return { done: status.json.indexLoaded === true && status.json.managerRegistered === true, status: status.json };
+  }, 150_000);
+  check("сервер поднялся сам после возврата пути", relived.status?.running === true, relived.status?.error);
+
   console.log("остановка");
+  const beforeDispose = managerCalls.filter((call) => call.method === "unregisterServer").length;
   for (const dispose of disposers) dispose();
   await new Promise((done) => setTimeout(done, 800));
   const stopped = await callRoute("/1cprops/platform-context");
   check("после dispose сервер не живёт", stopped.json.running === false);
-  check("менеджер получил снятие с учёта", managerCalls.some((call) => call.method === "unregisterServer"));
+  check(
+    "менеджер получил снятие с учёта на выходе",
+    managerCalls.filter((call) => call.method === "unregisterServer").length > beforeDispose,
+  );
 }
 
 rmSync(work, { recursive: true, force: true });

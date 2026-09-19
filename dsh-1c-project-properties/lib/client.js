@@ -1212,11 +1212,13 @@ window.__ModuleLoader__.load({
       const platformCtxCard = (() => {
         const info = platformCtx || {};
         const tone = info.indexLoaded ? "ok" : info.running ? "warn" : undefined;
-        const label = info.indexLoaded
-          ? "Работает: справка отдаётся агенту"
-          : info.running
-            ? "Запущен, индекс платформы не собран"
-            : "Не запущен";
+        const label = info.pathMissing
+          ? "Не запущен: путь к платформе не задан"
+          : info.indexLoaded
+            ? "Работает: справка отдаётся агенту"
+            : info.running
+              ? "Запущен, индекс платформы не собран"
+              : "Не запущен";
         const stats = info.indexStats || {};
         const details = [
           info.platformError || "",
@@ -1245,7 +1247,12 @@ window.__ModuleLoader__.load({
                       jsx("span", { className: "p1c-sm", children: label }),
                     ],
                   }),
-                  jsx(Btn, { disabled: busy, onClick: restartPlatformContext, children: "Перезапустить" }),
+                  jsx(Btn, {
+                    disabled: busy || Boolean(info.pathMissing),
+                    title: info.pathMissing ? "Сначала укажите путь к платформе в общих значениях" : undefined,
+                    onClick: restartPlatformContext,
+                    children: "Перезапустить",
+                  }),
                 ],
               }),
               details ? jsx("div", { className: "p1c-note", children: details }) : null,

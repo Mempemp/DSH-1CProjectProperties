@@ -1,6 +1,6 @@
 {
   "name": "dsh-1c-project-properties",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Параметры 1С в разрезе проекта для DeepSeek Harness: вкладка в Settings со списком проектов, значения — в файле .dsh/1c-project.json внутри папки проекта, выгрузка конфигурации в XML-файлы, развёртывание правил 1c-rules в проект и MCP-сервер справки по API платформы.",
   "keywords": [
     "dsh",

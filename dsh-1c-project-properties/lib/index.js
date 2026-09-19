@@ -995,10 +995,24 @@ function ensurePlatformContext({ restart = false } = {}) {
     const common = readCommon();
     const platform = resolvePlatform(common.platformPath);
     const dir = platform.exe ? platform.cwd : "";
+    if (!dir) {
+      // Путь не задан (или неверен) — сервер не поднимаем вовсе: процесс и
+      // индекс платформы занимают десятки мегабайт, а отдавать менеджеру всё
+      // равно нечего. Он стартует сам, когда путь появится: сохранение общих
+      // значений зовёт этот же запуск с restart.
+      stopPlatformContext();
+      const status = platformContextStatus();
+      const result = { ok: false, running: false, skipped: true, error: platform.error, ...status };
+      try {
+        await publishPlatformContext(status);
+      } catch (error) {
+        result.managerError = error?.message || String(error);
+      }
+      return result;
+    }
     const result = restart
       ? await restartPlatformContext({ dataDir: PLATFORM_CONTEXT_DATA_DIR, platformPath: dir })
       : await startPlatformContext({ dataDir: PLATFORM_CONTEXT_DATA_DIR, platformPath: dir });
-    if (!platform.exe) result.pathError = platform.error;
     try {
       await publishPlatformContext(result);
     } catch (error) {
@@ -1022,6 +1036,7 @@ function describePlatformContext() {
   return {
     ...platformContextStatus(),
     exe: platformContextExe(),
+    pathMissing: String(common.platformPath || "").trim() === "",
     platformError: platform.exe ? "" : platform.error,
     managerAvailable: Boolean(managerService()),
     managerRegistered: managerBridge.registered,
