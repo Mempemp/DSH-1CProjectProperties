@@ -238,7 +238,7 @@ node "C:\путь\к\dsh\lib\bin.js" plugin --profile web add "C:\путь\к\ds
 - `dsh-1c-project-properties/lib/rules-deploy.js` — раскладка правил 1c-rules в проект: план и выполнение, переписывание ссылок, `.dev.env` из параметров проекта, манифест развёртывания `.dsh/1c-rules.json`, удаление.
 - `dsh-1c-project-properties/lib/client.js` — клиентская часть: секция `settings.section` («1С: Параметры проектов»), список проектов и модальное окно параметров. Оформление — один инжектируемый `<style>` с классами `p1c-*` и переменными темы DSH (`--dsw-*`); инлайновых стилей в разметке нет.
 - `dsh-1c-project-properties/lib/platform-context.js` — супервизор сервера справки: конфиг в `$DSH_HOME/1c-platform-context`, свободный порт, запуск `vendor/bsl-context-rs/bsl-context-rs.exe`, ожидание готовности индекса, остановка процесса, снимок состояния.
-- `dsh-1c-project-properties/vendor/bsl-context-rs/` — сторонний бинарник сервера справки (v0.19.1, MIT) вместе с лицензией и происхождением (`VENDORED.md`). В репозитории лежит как есть, обновляется заменой файла.
+- `dsh-1c-project-properties/vendor/bsl-context-rs/` — сторонний бинарник сервера справки (v0.20.0, MIT) вместе с лицензией и происхождением (`VENDORED.md`). В репозитории лежит как есть, обновляется заменой файла.
 - `dsh-1c-project-properties/cordis.patch.yml` — строка монтирования плагина в композицию профиля.
 - `dsh-1c-project-properties/README.md` — описание пакета (то же, что и в архиве релиза).
 - `dsh-1c-project-properties/test/rules-deploy.smoke.mjs` — проверка контракта развёртывания правил на синтетическом наборе: переписывание ссылок, чужой `AGENTS.md`, идемпотентность, сохранение правок, удаление. Запуск: `node test/rules-deploy.smoke.mjs` (внешних зависимостей нет).
