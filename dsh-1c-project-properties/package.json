@@ -1,15 +1,19 @@
 {
   "name": "dsh-1c-project-properties",
-  "version": "0.8.5",
-  "description": "Параметры 1С в разрезе проекта: визард при добавлении проекта, проверка подключения внешним соединением, выгрузка/загрузка конфигурации, правила 1С, справка по платформе",
+  "version": "0.9.0",
+  "description": "Параметры 1С в разрезе проекта и движок rlm: визард добавления проекта, проверка подключения внешним соединением, выгрузка/загрузка конфигурации, правила 1С, справка по платформе, MCP-сервер анализа кода rlm-tools-bsl",
   "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "plugin",
     "1c",
     "1c-enterprise",
-    "settings",
-    "project"
+    "bsl",
+    "code-analysis",
+    "deepseek-harness",
+    "dsh",
+    "mcp",
+    "plugin",
+    "project",
+    "rlm",
+    "settings"
   ],
   "license": "MIT",
   "type": "module",

@@ -16,6 +16,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const work = join(tmpdir(), "dsh-1c-wizard-test-" + process.pid);
 process.env.DSH_HOME = join(work, "home");
+// Движок rlm в тестах не поднимаем: проверяем роуты и визард, а не сервер 1С-анализа.
+process.env.DSH_1CPROPS_NO_RLM = "1";
 
 let failures = 0;
 function check(label, condition, detail) {

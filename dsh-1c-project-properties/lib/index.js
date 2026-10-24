@@ -17,6 +17,7 @@ import {
   readPayload,
   removeRules,
 } from "./rules-deploy.js";
+import { applyRlm } from "./rlm-runner.js";
 import {
   PLATFORM_CONTEXT_SERVER,
   platformContextExe,
@@ -1300,6 +1301,11 @@ function describePlatformContext() {
 }
 
 export function apply(ctx) {
+  // Движок rlm-tools-bsl (раньше — отдельный плагин dsh-rlm-tools-bsl): MCP-сервер
+  // анализа кода 1С, индексы проектов, раздел настроек. Роуты остались под /rlm.
+  // Автозапуск выключается в тестах и при диагностике — флагом окружения.
+  applyRlm(ctx, { autoStart: process.env.DSH_1CPROPS_NO_RLM !== "1" });
+
   // Сервер справки поднимается сразу: путь к платформе может быть ещё не задан,
   // и это штатное состояние первой установки, а не ошибка.
   ctx.inject(["mcpManager"], (mctx) => {
