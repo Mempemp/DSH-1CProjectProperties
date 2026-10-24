@@ -18,7 +18,9 @@ const HOST = "127.0.0.1";
 const PLUGIN_VERSION = "0.1.11";
 const SCHEMA = "dsh-rlm-tools-bsl/v1";
 const DEFAULT_PORT = 9330;
-const START_TIMEOUT_MS = 30_000;
+// Холодный старт (uv-обёртка → python → импорт пакета) на рабочей машине занимает
+// около 30 с, поэтому окно ожидания вдвое больше: иначе здоровый сервер объявлялся мёртвым.
+const START_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 8_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const LOG_ROTATE_BYTES = 2 * 1024 * 1024;
@@ -527,7 +529,7 @@ async function probeIdentity(port, timeoutMs = PROBE_TIMEOUT_MS) {
         jsonrpc: "2.0",
         id: 1,
         method: "initialize",
-        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: name, version: PLUGIN_VERSION } },
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: SERVER_NAME, version: PLUGIN_VERSION } },
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
