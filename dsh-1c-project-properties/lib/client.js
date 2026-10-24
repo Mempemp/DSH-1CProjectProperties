@@ -507,7 +507,9 @@ window.__ModuleLoader__.load({
       }, [load]);
 
       useEffect(() => {
-        if (!data || !data.job || data.job.state !== "running") return;
+        const jobRunning = data && data.job && data.job.state === "running";
+        const installRunning = data && data.install && data.install.state === "running";
+        if (!jobRunning && !installRunning) return;
         const timer = setInterval(() => load(true), 2000);
         return () => clearInterval(timer);
       }, [data, load]);
@@ -640,7 +642,19 @@ window.__ModuleLoader__.load({
                 })
               : null,
             data && !data.bin
-              ? jsx("div", { className: "p1c-note p1c-note--warn", children: "rlm-bsl-index не найден: установите rlm-tools-bsl." })
+              ? jsx("div", {
+                  className: "p1c-note p1c-note--warn",
+                  children:
+                    data.install && data.install.state === "running"
+                      ? "rlm-bsl-index не найден — ставлю пакет rlm-tools-bsl (нужны uv и сеть, это занимает минуту)."
+                      : "rlm-bsl-index не найден: плагин ставит его сам при открытии карточки; причину отказа видно ниже.",
+                })
+              : null,
+            data && data.install && data.install.state === "failed" && !running
+              ? jsxs("div", {
+                  className: "p1c-note p1c-note--err",
+                  children: ["Установка rlm-bsl-index не удалась: ", String(data.install.error || "причина неизвестна")],
+                })
               : null,
             jsx("div", {
               className: "p1c-actions",
