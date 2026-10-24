@@ -586,7 +586,6 @@ window.__ModuleLoader__.load({
                   className: "p1c-rows",
                   children: [
                     jsx(Row, { label: "Размер", value: index.size }),
-                    jsx(Row, { label: "Схема", value: index.schema || "неизвестна" }),
                     jsx(Row, { label: "Собрано", value: index.built || "неизвестно" }),
                   ],
                 })

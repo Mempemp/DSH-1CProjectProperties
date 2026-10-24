@@ -992,7 +992,6 @@ function parseIndexInfo(text) {
   };
   return {
     dbPath: pick(/^Index:[ \t]*(.+)$/m),
-    schema: pick(/^[ \t]+Index:[ \t]*(v\d+)[ \t]*$/m),
     statusText: pick(/^[ \t]*Status:[ \t]*(.+)$/m),
     config: pick(/^[ \t]*Config:[ \t]*(.+)$/m),
     format: pick(/^[ \t]*Format:[ \t]*(.+)$/m),
