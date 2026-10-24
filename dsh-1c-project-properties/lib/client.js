@@ -258,7 +258,7 @@ window.__ModuleLoader__.load({
 /* Шаги визарда: серая полоса на весь путь, текущий шаг — зелёным свечением. */
 /* Окно визарда одной высоты на всех шагах: страницы не раскачивают его размер.
    Считано по самой большой странице — «База и платформа». */
-.p1c-dialog__body--wizard { height: 470px; max-height: calc(100vh - 236px); overflow-y: auto; scrollbar-gutter: stable; }
+.p1c-dialog__body--wizard { height: 480px; max-height: calc(100vh - 226px); overflow-y: auto; scrollbar-gutter: stable; }
 .p1c-check-line--status { font-size: 12px; align-items: center; min-height: 18px; }
 .p1c-card .p1c-details { margin-top: 2px; }
 .p1c-details .p1c-grid { margin-top: 8px; }
@@ -452,6 +452,13 @@ window.__ModuleLoader__.load({
       unavailable: { text: "rlm-bsl-index не найден", tone: "err" },
     };
 
+    /** Время прогона из настроек — ISO-строка, показываем по-человечески. */
+    const whenText = (value) => {
+      if (!value) return "неизвестно";
+      const at = new Date(value);
+      return Number.isNaN(at.getTime()) ? String(value) : at.toLocaleString("ru-RU");
+    };
+
     /**
      * Карточка индекса rlm в окне проекта. Маршруты живут в dsh-rlm-tools-bsl:
      * /rlm/index/state, /rlm/index/config, /rlm/index/job, /rlm/index/cancel.
@@ -463,10 +470,16 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null);
       const [busy, setBusy] = useState(false);
       const autoRef = useRef(false);
+      // Первое чтение состояния после открытия карточки помечается как «проект открыт»:
+      // плагин запускает по этой метке сборку отсутствующего индекса.
+      const openRef = useRef(false);
 
       const load = useCallback(async (silent = false) => {
         try {
-          const next = await rlmRequest("/index/state?path=" + encodeURIComponent(path));
+          const next = await rlmRequest(
+            "/index/state?open=" + (openRef.current ? "0" : "1") + "&path=" + encodeURIComponent(path)
+          );
+          openRef.current = true;
           setData(next);
           setError(null);
           const status = next.index && next.index.status;
@@ -489,6 +502,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         autoRef.current = false;
+        openRef.current = false;
         load();
       }, [load]);
 
@@ -538,6 +552,7 @@ window.__ModuleLoader__.load({
 
       const index = data && data.index ? data.index : null;
       const job = data && data.job ? data.job : null;
+      const project = data && data.project ? data.project : null;
       const sameJob = Boolean(job && job.path && job.path.toLowerCase() === path.toLowerCase());
       const running = Boolean(job && job.state === "running" && sameJob);
       const anyRunning = Boolean(job && job.state === "running");
@@ -579,6 +594,26 @@ window.__ModuleLoader__.load({
             index && index.dbPath ? jsx("div", { className: "p1c-note p1c-mono", children: index.dbPath }) : null,
             index && index.error && index.status !== "missing"
               ? jsx("div", { className: "p1c-note p1c-note--err", children: index.error })
+              : null,
+            project && project.lastError && !running
+              ? jsxs("div", {
+                  className: "p1c-note p1c-note--err",
+                  children: [
+                    "Последняя попытка ",
+                    whenText(project.lastAttemptAt),
+                    " завершилась ошибкой: ",
+                    String(project.lastError),
+                  ],
+                })
+              : null,
+            project && !project.lastError && !running && status === "missing" && project.lastAttemptAt
+              ? jsxs("div", {
+                  className: "p1c-note p1c-note--warn",
+                  children: ["Последняя попытка ", whenText(project.lastAttemptAt), " прошла, но индекса в итоге нет."],
+                })
+              : null,
+            data && data.logFile && project && project.lastError && !running
+              ? jsxs("div", { className: "p1c-note p1c-mono", children: ["журнал: ", String(data.logFile)] })
               : null,
             jsx(Check, {
               checked: Boolean(data && data.enabled),
@@ -1353,7 +1388,7 @@ window.__ModuleLoader__.load({
         }),
       });
 
-      const stepDump = jsx(Card, {
+      const dumpCard = jsx(Card, {
         title: "Выгрузка конфигурации",
         hint: "Конфигуратор выгружает конфигурацию базы в XML-файлы. Пока идёт операция, база занята.",
         children: jsxs("div", {
@@ -1455,6 +1490,23 @@ window.__ModuleLoader__.load({
         }),
       });
 
+      // Индекс rlm — рядом с выгрузкой, а не на странице итога: он нужен, когда
+      // исходники уже в проекте, и это отдельная работа, а не строка сводки.
+      const rlmCard = jsx(Card, {
+        title: "Индекс rlm",
+        hint: "Индекс ускоряет поиск по именам и старт сессии. Сборка идёт в фоне; прогресс — в параметрах проекта. Включайте, когда исходники уже выгружены.",
+        children: jsx(Check, {
+          checked: indexRlm,
+          onChange: (event) => setIndexRlm(event.target.checked),
+          children: "построить индекс rlm для этого проекта",
+        }),
+      });
+
+      const stepDump = jsxs("div", {
+        className: "p1c-stack",
+        children: [dumpCard, rlmCard],
+      });
+
       const effectivePlatform = form.platformPath || commonPlatform;
       const rulesSummary = rulesResult && rulesResult.ok
         ? "развёрнуты"
@@ -1523,6 +1575,7 @@ window.__ModuleLoader__.load({
                 jsx(Row, { label: "Платформа", value: effectivePlatform || "не задана" }),
                 jsx(Row, { label: "Навыки 1С", value: rulesSummary }),
                 jsx(Row, { label: "Выгрузка", value: dumpSummary }),
+                jsx(Row, { label: "Индекс rlm", value: indexRlm ? "включён" : "выключен" }),
               ],
             }),
           }),
@@ -1538,15 +1591,6 @@ window.__ModuleLoader__.load({
             children: jsx("div", {
               className: "p1c-note",
               children: "Параметры — .dsh/1c-project.json. Изменить позже: Настройки → 1С: Параметры проектов.",
-            }),
-          }),
-          jsx(Card, {
-            title: "Индекс rlm",
-            hint: "Индекс ускоряет поиск по именам и старт сессии. Сборка идёт в фоне; прогресс — в параметрах проекта. Включайте, когда исходники уже выгружены.",
-            children: jsx(Check, {
-              checked: indexRlm,
-              onChange: (event) => setIndexRlm(event.target.checked),
-              children: "построить индекс rlm для этого проекта",
             }),
           }),
         ],
@@ -2094,7 +2138,6 @@ window.__ModuleLoader__.load({
                       ],
                     }),
                   }),
-
                   jsx(RlmIndexCard, { path: project.path }),
                 ],
               }),

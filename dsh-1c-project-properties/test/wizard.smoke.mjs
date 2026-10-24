@@ -378,6 +378,7 @@ const hookValues = [
   null, // status
   false, // baseSaved
   null, // mcp
+  false, // indexRlm
   null, // pathCheck
   null, // connection
   false, // checking
@@ -432,9 +433,18 @@ check(
   clientSource.includes("p1c-check-line--status") && !/checkText[\s\S]{0,600}item\.detail/.test(clientSource),
 );
 check("короткая причина отказа без пути", clientSource.includes("function shortPathError"));
+
+// Индекс rlm: на шаге выгрузки, а не на странице итога.
+const dumpIndex = clientSource.indexOf("const dumpCard = jsx(Card, {");
+const doneIndex = clientSource.indexOf("const stepDone = jsxs(\"div\", {");
+const dumpStepSource = clientSource.slice(dumpIndex, doneIndex);
+const doneStepSource = clientSource.slice(doneIndex);
+check("индекс rlm стоит на шаге выгрузки", dumpStepSource.includes("построить индекс rlm для этого проекта"));
+check("на странице итога чекбокса индекса нет", !doneStepSource.includes("построить индекс rlm для этого проекта"));
+check("в итоге индекс показан строкой", doneStepSource.includes('label: "Индекс rlm"'));
 check(
   "окно визарда одной высоты на всех шагах",
-  /\.p1c-dialog__body--wizard \{ height: 470px/.test(cssText),
+  /\.p1c-dialog__body--wizard \{ height: 480px/.test(cssText),
   (cssText.match(/\.p1c-dialog__body--wizard \{[^}]*\}/) || [""])[0],
 );
 
