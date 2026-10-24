@@ -14,7 +14,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const React = require("react");
     const { jsx, jsxs } = require("react/jsx-runtime");
-    const { useState, useEffect, useCallback } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
     const ReactDOM = (() => {
       try {
         return require("react-dom");
@@ -53,6 +53,28 @@ window.__ModuleLoader__.load({
           );
         }
         throw new Error(detail);
+      }
+      return data;
+    }
+
+    // Маршруты индекса живут в dsh-rlm-tools-bsl (префикс /rlm), а не в /1cprops.
+    async function rlmRequest(path, init) {
+      const response = await fetch("/rlm" + path, {
+        headers: { "content-type": "application/json" },
+        ...init,
+      });
+      const type = response.headers.get("content-type") || "";
+      if (!type.includes("application/json")) {
+        const error = new Error("маршрут /rlm" + path + " не найден: плагин dsh-rlm-tools-bsl не установлен");
+        error.status = 0;
+        throw error;
+      }
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data || data.ok === false) {
+        const detail = (data && data.error) || response.statusText || "HTTP " + response.status;
+        const error = new Error(detail);
+        error.status = response.status;
+        throw error;
       }
       return data;
     }
@@ -419,6 +441,191 @@ window.__ModuleLoader__.load({
         children: [jsx("path", { d: "M18 6 6 18" }), jsx("path", { d: "m6 6 12 12" })],
       });
 
+    const INDEX_STATUS = {
+      missing: { text: "индекса нет", tone: "warn" },
+      fresh: { text: "актуален", tone: "ok" },
+      stale_age: { text: "устарел по возрасту", tone: "warn" },
+      stale_content: { text: "устарел: файлы изменились", tone: "warn" },
+      stale_structure: { text: "устарел: структура изменилась", tone: "warn" },
+      unknown: { text: "состояние неизвестно", tone: "" },
+      error: { text: "ошибка проверки", tone: "err" },
+      unavailable: { text: "rlm-bsl-index не найден", tone: "err" },
+    };
+
+    /**
+     * Карточка индекса rlm в окне проекта. Маршруты живут в dsh-rlm-tools-bsl:
+     * /rlm/index/state, /rlm/index/config, /rlm/index/job, /rlm/index/cancel.
+     * Плагина может не быть — тогда карточка говорит об этом прямо.
+     */
+    function RlmIndexCard(props) {
+      const { path } = props;
+      const [data, setData] = useState(null);
+      const [error, setError] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const autoRef = useRef(false);
+
+      const load = useCallback(async (silent = false) => {
+        try {
+          const next = await rlmRequest("/index/state?path=" + encodeURIComponent(path));
+          setData(next);
+          setError(null);
+          const status = next.index && next.index.status;
+          const running = next.job && next.job.state === "running";
+          if (
+            !silent &&
+            !autoRef.current &&
+            next.enabled &&
+            !running &&
+            (status === "stale_age" || status === "stale_content" || status === "stale_structure")
+          ) {
+            autoRef.current = true;
+            await rlmRequest("/index/job", { method: "POST", body: JSON.stringify({ path, action: "update" }) }).catch(() => null);
+            setTimeout(() => load(true), 800);
+          }
+        } catch (e) {
+          setError(e);
+        }
+      }, [path]);
+
+      useEffect(() => {
+        autoRef.current = false;
+        load();
+      }, [load]);
+
+      useEffect(() => {
+        if (!data || !data.job || data.job.state !== "running") return;
+        const timer = setInterval(() => load(true), 2000);
+        return () => clearInterval(timer);
+      }, [data, load]);
+
+      const toggle = async (enabled) => {
+        setBusy(true);
+        try {
+          // Флаг — в параметры проекта (.dsh/1c-project.json); карта rlm-плагина
+          // синхронизируется следом, чтобы автообновление знало путь.
+          await request("/project-index", { method: "POST", body: JSON.stringify({ path, enabled }) });
+          const next = await rlmRequest("/index/config", { method: "POST", body: JSON.stringify({ path, enabled }) });
+          setData(next);
+          setError(null);
+        } catch (e) {
+          setError(e);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const run = async (action) => {
+        setBusy(true);
+        try {
+          await rlmRequest("/index/job", { method: "POST", body: JSON.stringify({ path, action }) });
+          await load(true);
+        } catch (e) {
+          setError(e);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      if (error && (error.status === 404 || error.status === 0)) {
+        return jsx(Card, {
+          title: "Индекс rlm",
+          children: jsx("div", {
+            className: "p1c-note p1c-note--warn",
+            children: "Плагин dsh-rlm-tools-bsl не установлен — индексом управлять нечем.",
+          }),
+        });
+      }
+
+      const index = data && data.index ? data.index : null;
+      const job = data && data.job ? data.job : null;
+      const sameJob = Boolean(job && job.path && job.path.toLowerCase() === path.toLowerCase());
+      const running = Boolean(job && job.state === "running" && sameJob);
+      const anyRunning = Boolean(job && job.state === "running");
+      const status = index ? index.status : "unknown";
+      const info = INDEX_STATUS[status] || INDEX_STATUS.unknown;
+      const label = running ? (job.action === "update" ? "обновляется…" : "собирается…") : info.text;
+      const action = status === "missing" ? "build" : "update";
+      const canRun = Boolean(data && data.bin && data.enabled) && !anyRunning && !busy;
+
+      return jsx(Card, {
+        title: "Индекс rlm",
+        hint: "Ускоряет поиск по именам и старт сессии. Обновляется при старте DSH, при открытии проекта и раз в неделю.",
+        children: jsxs("div", {
+          className: "p1c-stack",
+          children: [
+            jsxs("div", {
+              style: { display: "flex", alignItems: "center", gap: 8 },
+              children: [
+                jsx(Dot, { tone: running ? "warn" : info.tone }),
+                jsx("div", { className: "p1c-sm", children: label }),
+                anyRunning && !sameJob
+                  ? jsx("div", { className: "p1c-note", children: "идёт операция по другому проекту" })
+                  : null,
+              ],
+            }),
+            error && error.status !== 0 && error.status !== 404
+              ? jsx("div", { className: "p1c-note p1c-note--err", children: String(error.message || error) })
+              : null,
+            index && index.size
+              ? jsxs("div", {
+                  className: "p1c-rows",
+                  children: [
+                    jsx(Row, { label: "Размер", value: index.size }),
+                    jsx(Row, { label: "Схема", value: index.schema || "неизвестна" }),
+                    jsx(Row, { label: "Собрано", value: index.built || "неизвестно" }),
+                  ],
+                })
+              : null,
+            index && index.dbPath ? jsx("div", { className: "p1c-note p1c-mono", children: index.dbPath }) : null,
+            index && index.error && index.status !== "missing"
+              ? jsx("div", { className: "p1c-note p1c-note--err", children: index.error })
+              : null,
+            jsx(Check, {
+              checked: Boolean(data && data.enabled),
+              disabled: busy || anyRunning,
+              onChange: (event) => toggle(event.target.checked),
+              children: "индексировать проект",
+            }),
+            running
+              ? jsx(JobBox, {
+                  job: {
+                    state: job.state,
+                    label: job.action === "update" ? "Обновление индекса" : "Сборка индекса",
+                    elapsedMs: job.elapsedMs,
+                    dir: path,
+                    error: job.error,
+                    log: (job.lines || []).join("\n"),
+                  },
+                  actions: jsx(Btn, {
+                    variant: "danger",
+                    disabled: busy,
+                    onClick: () => rlmRequest("/index/cancel", { method: "POST" }).then(() => load(true)).catch(() => {}),
+                    children: "Отменить",
+                  }),
+                })
+              : null,
+            data && !data.bin
+              ? jsx("div", { className: "p1c-note p1c-note--warn", children: "rlm-bsl-index не найден: установите rlm-tools-bsl." })
+              : null,
+            jsx("div", {
+              className: "p1c-actions",
+              children: jsx(Btn, {
+                variant: "primary",
+                disabled: !canRun,
+                title: data && !data.bin ? "rlm-bsl-index не найден" : data && !data.enabled ? "сначала включите «индексировать проект»" : undefined,
+                onClick: () => run(action),
+                children: action === "build" ? "Собрать" : "Обновить",
+              }),
+            }),
+            jsx("div", {
+              className: "p1c-note",
+              children: "Полная сборка — несколько минут, обновление — секунды. Пересборка нужна только при смене схемы индекса.",
+            }),
+          ],
+        }),
+      });
+    }
+
     const EMPTY_FORM = { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" };
 
     const EMPTY_RUN = { format: "Hierarchical", update: false, cleanLocks: false };
@@ -661,6 +868,7 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = useState(null);
       const [baseSaved, setBaseSaved] = useState(false);
       const [mcp, setMcp] = useState(null);
+      const [indexRlm, setIndexRlm] = useState(false);
       const [pathCheck, setPathCheck] = useState(null);
       const [connection, setConnection] = useState(null);
       const [checking, setChecking] = useState(false);
@@ -753,6 +961,33 @@ window.__ModuleLoader__.load({
           setStatus({ kind: "error", text: String((error && error.message) || error) });
         } finally {
           setBusy(false);
+        }
+      };
+
+      // Завершение визарда: флаг индекса — в общие настройки, сборка — в фоне.
+      // Если плагина rlm нет, визард всё равно закрывается: проект настроен.
+      const finishWizard = async () => {
+        setBusy(true);
+        try {
+          await request("/project-index", {
+            method: "POST",
+            body: JSON.stringify({ path: target.path, enabled: indexRlm }),
+          });
+          await rlmRequest("/index/config", {
+            method: "POST",
+            body: JSON.stringify({ path: target.path, enabled: indexRlm }),
+          });
+          if (indexRlm) {
+            await rlmRequest("/index/job", {
+              method: "POST",
+              body: JSON.stringify({ path: target.path, action: "build" }),
+            }).catch(() => null);
+          }
+        } catch {
+          // rlm-плагин может быть не установлен
+        } finally {
+          setBusy(false);
+          onClose();
         }
       };
 
@@ -1305,6 +1540,15 @@ window.__ModuleLoader__.load({
               children: "Параметры — .dsh/1c-project.json. Изменить позже: Настройки → 1С: Параметры проектов.",
             }),
           }),
+          jsx(Card, {
+            title: "Индекс rlm",
+            hint: "Индекс ускоряет поиск по именам и старт сессии. Сборка идёт в фоне; прогресс — в параметрах проекта. Включайте, когда исходники уже выгружены.",
+            children: jsx(Check, {
+              checked: indexRlm,
+              onChange: (event) => setIndexRlm(event.target.checked),
+              children: "построить индекс rlm для этого проекта",
+            }),
+          }),
         ],
       });
 
@@ -1353,7 +1597,7 @@ window.__ModuleLoader__.load({
             children: "Далее",
           });
         }
-        return jsx(Btn, { variant: "primary", onClick: onClose, children: "Готово" });
+        return jsx(Btn, { variant: "primary", disabled: busy, onClick: finishWizard, children: "Готово" });
       })();
 
       return portal(
@@ -1850,6 +2094,8 @@ window.__ModuleLoader__.load({
                       ],
                     }),
                   }),
+
+                  jsx(RlmIndexCard, { path: project.path }),
                 ],
               }),
               jsxs("div", {

@@ -1412,6 +1412,37 @@ export function apply(ctx) {
     },
   });
 
+  // Флаг индекса rlm — в том же файле параметров проекта, чтобы ехать с проектом.
+  // Остальные ключи файла не трогаются: правка точечная, как у saveParams.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/project-index",
+    handler: async (req, res) => {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const target = String(body?.path ?? "").trim();
+        if (!target || !isAbsolute(target)) {
+          return json(res, 400, { ok: false, error: "нужен абсолютный путь к папке проекта" });
+        }
+        const projectPath = canonical(target);
+        if (!isDirectory(projectPath)) {
+          return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        }
+        const file = paramsFile(projectPath);
+        const current = readJson(file) ?? {};
+        if (body.enabled === undefined) {
+          return json(res, 200, { ok: true, path: projectPath, enabled: current.rlmIndex === true, file });
+        }
+        current.rlmIndex = body.enabled !== false;
+        current.$schema = SCHEMA;
+        writeJson(file, current);
+        json(res, 200, { ok: true, path: projectPath, enabled: current.rlmIndex, file });
+      } catch (error) {
+        json(res, 400, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
   // Чтение действующих параметров проекта — точка входа для других плагинов и агентов.
   ctx.webServer.register({
     kind: "exact",
