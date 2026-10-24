@@ -472,6 +472,37 @@ function rlmProcessTop(pid) {
   }
 }
 
+// Порт занимает не наш прямой потомок: exe-обёртка uv поднимает python, и слушает уже он.
+// Поэтому «чужой ли процесс» решаем по дереву, а не сравнением с pid потомка.
+function processTree(rootPid) {
+  if (process.platform !== "win32" || !rootPid) return null;
+  try {
+    const script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress";
+    const run = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20000 });
+    if (run.status !== 0) return null;
+    const parsed = JSON.parse(String(run.stdout ?? "").trim() || "[]");
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    const children = new Map();
+    for (const proc of list) {
+      const parent = Number(proc.ParentProcessId);
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent).push(Number(proc.ProcessId));
+    }
+    const tree = new Set([Number(rootPid)]);
+    const queue = [Number(rootPid)];
+    while (queue.length) {
+      for (const child of children.get(queue.shift()) ?? []) {
+        if (tree.has(child)) continue;
+        tree.add(child);
+        queue.push(child);
+      }
+    }
+    return tree;
+  } catch {
+    return null;
+  }
+}
+
 // ── пробы сервера ──────────────────────────────────────────────────────────
 
 function sseJson(text) {
@@ -766,10 +797,21 @@ async function startServer(rt) {
       if (touched.length) logInfo(rt, "MCP-запись обновлена: " + touched.join(", "));
       await syncManagerRecord(rt);
     }
+    if (!rt.version && !rt.lastError) {
+      // Медленный первый старт (импорт python-пакета, установка CLI индекса) — одна
+      // повторная проба: сервер мог подняться на последней секунде окна ожидания.
+      const late = await probeIdentity(config.port, 3000);
+      if (late.ok) {
+        rt.version = late.version;
+        logInfo(rt, `сервер поднят на ${HOST}:${config.port} (v${late.version ?? "?"})`);
+      }
+    }
     if (!rt.version) {
       if (!rt.lastError) {
         const owner = portOwner(config.port, true);
-        rt.lastError = owner && owner.pid !== rt.childPid
+        const tree = rt.childPid ? processTree(rt.childPid) : null;
+        const ours = Boolean(owner) && Boolean(tree) && tree.has(Number(owner.pid));
+        rt.lastError = owner && !ours
           ? `порт ${config.port} занят процессом ${owner.image ?? "?"} (pid ${owner.pid})`
           : `сервер не ответил за ${Math.round(START_TIMEOUT_MS / 1000)} с; хвост лога — ниже`;
       }

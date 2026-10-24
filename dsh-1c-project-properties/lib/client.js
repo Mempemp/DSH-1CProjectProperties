@@ -507,9 +507,7 @@ window.__ModuleLoader__.load({
       }, [load]);
 
       useEffect(() => {
-        const jobRunning = data && data.job && data.job.state === "running";
-        const installRunning = data && data.install && data.install.state === "running";
-        if (!jobRunning && !installRunning) return;
+        if (!data || !data.job || data.job.state !== "running") return;
         const timer = setInterval(() => load(true), 2000);
         return () => clearInterval(timer);
       }, [data, load]);
@@ -645,15 +643,7 @@ window.__ModuleLoader__.load({
               ? jsx("div", {
                   className: "p1c-note p1c-note--warn",
                   children:
-                    data.install && data.install.state === "running"
-                      ? "rlm-bsl-index не найден — ставлю пакет rlm-tools-bsl (нужны uv и сеть, это занимает минуту)."
-                      : "rlm-bsl-index не найден: плагин ставит его сам при открытии карточки; причину отказа видно ниже.",
-                })
-              : null,
-            data && data.install && data.install.state === "failed" && !running
-              ? jsxs("div", {
-                  className: "p1c-note p1c-note--err",
-                  children: ["Установка rlm-bsl-index не удалась: ", String(data.install.error || "причина неизвестна")],
+                    "rlm-bsl-index не найден: его ставит установщик при первой раскатке каталога (uv и пакет rlm-tools-bsl). Перезапустите приложение; если не помогло — причина в журнале раскатки catalog-seed.log в доме DSH.",
                 })
               : null,
             jsx("div", {
@@ -2767,6 +2757,10 @@ window.__ModuleLoader__.load({
       if (server.installing) return { dot: "◌", color: "#e0a030", text: "устанавливается rlm-tools-bsl…" };
       if (server.starting) return { dot: "◌", color: "#e0a030", text: "запускается…" };
       if (server.stopping) return { dot: "◌", color: "#e0a030", text: "останавливается…" };
+      // Процесс жив, но initialize не подтвердил версию: зелёный здесь врал бы.
+      if ((server.managed || server.adopted) && server.lastError) {
+        return { dot: "◌", color: "#e0a030", text: "запущен (pid " + server.pid + "), но не ответил на пробу" };
+      }
       if (server.managed) return { dot: "●", color: "#4caf50", text: "работает (pid " + server.pid + (server.version ? ", v" + server.version : "") + ")" };
       if (server.adopted) return { dot: "●", color: "#4caf50", text: "работает — внешний процесс (pid " + server.pid + "), подхвачен при старте" };
       if (server.portOwner) return { dot: "▲", color: "#e57373", text: "порт " + server.portOwner.pid + " занят: " + (server.portOwner.image || "процесс") };
@@ -2851,10 +2845,7 @@ window.__ModuleLoader__.load({
         : null;
 
       return jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 14, maxWidth: 720 }, children: [
-        jsxs("div", { children: [
-          jsx("div", { style: { fontSize: 14, fontWeight: 600 }, children: "rlm-tools-bsl" }),
-          jsx("div", { style: rlmStyles.subtitle, children: "Сервер анализа кода 1С (MCP) поднимается вместе с DSH и гасится вместе с ним." }),
-        ]}),
+        jsx("div", { style: { fontSize: 14, fontWeight: 600 }, children: "rlm-tools-bsl" }),
         statusLine,
         jsxs("div", { style: rlmStyles.card, children: [
           jsxs("div", { style: rlmStyles.row, children: [
