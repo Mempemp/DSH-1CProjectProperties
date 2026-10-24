@@ -436,14 +436,14 @@ check(
 );
 check("короткая причина отказа без пути", clientSource.includes("function shortPathError"));
 
-// Индекс rlm: на шаге выгрузки, а не на странице итога.
+// Синтаксическая индексация: на шаге выгрузки, а не на странице итога.
 const dumpIndex = clientSource.indexOf("const dumpCard = jsx(Card, {");
 const doneIndex = clientSource.indexOf("const stepDone = jsxs(\"div\", {");
 const dumpStepSource = clientSource.slice(dumpIndex, doneIndex);
 const doneStepSource = clientSource.slice(doneIndex);
-check("индекс rlm стоит на шаге выгрузки", dumpStepSource.includes("построить индекс rlm для этого проекта"));
-check("на странице итога чекбокса индекса нет", !doneStepSource.includes("построить индекс rlm для этого проекта"));
-check("в итоге индекс показан строкой", doneStepSource.includes('label: "Индекс rlm"'));
+check("индексация стоит на шаге выгрузки", dumpStepSource.includes("индексировать проект"));
+check("на странице итога чекбокса индексации нет", !doneStepSource.includes("индексировать проект"));
+check("в итоге индексация показана строкой", doneStepSource.includes('label: "Синтаксическая индексация"'));
 check(
   "окно визарда одной высоты на всех шагах",
   /\.p1c-dialog__body--wizard \{ height: 480px/.test(cssText),

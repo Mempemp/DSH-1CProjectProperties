@@ -450,7 +450,7 @@ window.__ModuleLoader__.load({
       stale_structure: { text: "устарел: структура изменилась", tone: "warn" },
       unknown: { text: "состояние неизвестно", tone: "" },
       error: { text: "ошибка проверки", tone: "err" },
-      unavailable: { text: "rlm-bsl-index не найден", tone: "err" },
+      unavailable: { text: "средство индексации не установлено", tone: "err" },
     };
 
     /** Время прогона из настроек — ISO-строка, показываем по-человечески. */
@@ -543,7 +543,7 @@ window.__ModuleLoader__.load({
 
       if (error && (error.status === 404 || error.status === 0)) {
         return jsx(Card, {
-          title: "Индекс rlm",
+          title: "Синтаксическая индексация",
           children: jsx("div", {
             className: "p1c-note p1c-note--warn",
             children: "Плагин dsh-rlm-tools-bsl не установлен — индексом управлять нечем.",
@@ -564,8 +564,7 @@ window.__ModuleLoader__.load({
       const canRun = Boolean(data && data.bin && data.enabled) && !anyRunning && !busy;
 
       return jsx(Card, {
-        title: "Индекс rlm",
-        hint: "Ускоряет поиск по именам и старт сессии. Обновляется при старте DSH, при открытии проекта и раз в неделю.",
+        title: "Синтаксическая индексация проекта",
         children: jsxs("div", {
           className: "p1c-stack",
           children: [
@@ -652,7 +651,7 @@ window.__ModuleLoader__.load({
               ? jsx("div", {
                   className: "p1c-note p1c-note--warn",
                   children:
-                    "rlm-bsl-index не найден: его ставит установщик при первой раскатке каталога (uv и пакет rlm-tools-bsl). Перезапустите приложение; если не помогло — причина в журнале раскатки catalog-seed.log в доме DSH.",
+                    "средство индексации не установлено: его ставит установщик при первой раскатке каталога (uv и пакет rlm-tools-bsl). Перезапустите приложение; если не помогло — причина в журнале раскатки catalog-seed.log в доме DSH.",
                 })
               : null,
             jsx("div", {
@@ -660,7 +659,7 @@ window.__ModuleLoader__.load({
               children: jsx(Btn, {
                 variant: "primary",
                 disabled: !canRun,
-                title: data && !data.bin ? "rlm-bsl-index не найден" : data && !data.enabled ? "сначала включите «индексировать проект»" : undefined,
+                title: data && !data.bin ? "средство индексации не установлено" : data && !data.enabled ? "сначала включите «индексировать проект»" : undefined,
                 onClick: () => run(action),
                 children: action === "build" ? "Собрать" : "Обновить",
               }),
@@ -1506,12 +1505,11 @@ window.__ModuleLoader__.load({
       // Индекс rlm — рядом с выгрузкой, а не на странице итога: он нужен, когда
       // исходники уже в проекте, и это отдельная работа, а не строка сводки.
       const rlmCard = jsx(Card, {
-        title: "Индекс rlm",
-        hint: "Индекс ускоряет поиск по именам и старт сессии. Сборка идёт в фоне; прогресс — в параметрах проекта. Включайте, когда исходники уже выгружены.",
+        title: "Синтаксическая индексация",
         children: jsx(Check, {
           checked: indexRlm,
           onChange: (event) => setIndexRlm(event.target.checked),
-          children: "построить индекс rlm для этого проекта",
+          children: "индексировать проект",
         }),
       });
 
@@ -1588,7 +1586,7 @@ window.__ModuleLoader__.load({
                 jsx(Row, { label: "Платформа", value: effectivePlatform || "не задана" }),
                 jsx(Row, { label: "Навыки 1С", value: rulesSummary }),
                 jsx(Row, { label: "Выгрузка", value: dumpSummary }),
-                jsx(Row, { label: "Индекс rlm", value: indexRlm ? "включён" : "выключен" }),
+                jsx(Row, { label: "Синтаксическая индексация", value: indexRlm ? "включена" : "выключена" }),
               ],
             }),
           }),
