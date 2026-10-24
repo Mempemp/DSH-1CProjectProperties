@@ -157,6 +157,9 @@ if (!platform) {
 
   const stateRoute = await callRoute("/1cprops/state");
   check("общий роут состояния несёт статус справки", stateRoute.json.platformContext?.running === true);
+  // Параметры проекта обязаны открываться даже при сломанном движке: отказ движка отдаётся
+  // полем engineError, а не исчезновением маршрута.
+  check("состояние называет отказ движка полем engineError", "engineError" in stateRoute.json, JSON.stringify(Object.keys(stateRoute.json || {})));
 
   console.log("путь очищен");
   const unregistersBefore = managerCalls.filter((call) => call.method === "unregisterServer").length;

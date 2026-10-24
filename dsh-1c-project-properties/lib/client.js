@@ -43,13 +43,14 @@ window.__ModuleLoader__.load({
       const data = await response.json().catch(() => null);
       if (!response.ok || !data || data.ok === false) {
         const detail = (data && data.error) || response.statusText || "HTTP " + response.status;
-        // 404 без тела — это почти всегда рассинхрон половин плагина: клиентская
-        // половина подхватывается перезагрузкой страницы, хост-часть — только
-        // стартом DSH. Без объяснения такое читается как «плагин сломан».
+        // 404 без тела — это «маршрут никто не зарегистрировал»: хост-часть плагина не
+        // поднялась при старте DSH или упала на старте. Перезагрузка страницы тут не помогает,
+        // и без объяснения это читается как «плагин сломан».
         if (response.status === 404 && data === null) {
           throw new Error(
-            "DSH не знает маршрут " + API + path + " (" + detail + "): в запущенном процессе старая хост-часть плагина. " +
-            "Перезапустите DSH — клиентская половина обновляется перезагрузкой страницы, хост-часть только при старте.",
+            "Маршрут " + API + path + " не зарегистрирован (" + detail + "): хост-часть плагина не поднялась при старте DSH. " +
+            "Перезапуск страницы не поможет — нужен перезапуск DSH. Если и он не помогает, в профиле осталась вторая копия " +
+            "плагина или он упал при загрузке: причина в журнале DSH.",
           );
         }
         throw new Error(detail);
@@ -2213,6 +2214,19 @@ window.__ModuleLoader__.load({
       }, [load]);
 
       const project = state && openPath ? state.projects.find((p) => p.path === openPath) || null : null;
+      // Движок поднимается отдельно от параметров проекта: его отказ должен быть назван на этой
+      // странице, а не всплывать 404-м в карточке индекса.
+      const engineNotice =
+        state && state.engineError
+          ? jsxs("div", {
+              className: "p1c-note p1c-note--warn",
+              children: [
+                "Движок rlm-tools-bsl не поднялся: ",
+                String(state.engineError),
+                ". Параметры проекта работают, индексы и MCP-сервер — нет. Если в профиле остался старый плагин dsh-rlm-tools-bsl, удалите его: он владеет теми же маршрутами.",
+              ],
+            })
+          : null;
 
       useEffect(() => {
         if (!project) {
@@ -2570,6 +2584,7 @@ window.__ModuleLoader__.load({
             ],
           }),
           statusLine,
+          engineNotice,
           jobStrip,
           jsx(Card, {
             title: "Общие значения",

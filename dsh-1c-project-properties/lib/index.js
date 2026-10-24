@@ -1300,11 +1300,10 @@ function describePlatformContext() {
   };
 }
 
+// Причина, по которой движок не поднялся: отдаётся карточке, чтобы отказ был назван, а не гадался.
+let engineError = null;
+
 export function apply(ctx) {
-  // Движок rlm-tools-bsl (раньше — отдельный плагин dsh-rlm-tools-bsl): MCP-сервер
-  // анализа кода 1С, индексы проектов, раздел настроек. Роуты остались под /rlm.
-  // Автозапуск выключается в тестах и при диагностике — флагом окружения.
-  applyRlm(ctx, { autoStart: process.env.DSH_1CPROPS_NO_RLM !== "1" });
 
   // Сервер справки поднимается сразу: путь к платформе может быть ещё не задан,
   // и это штатное состояние первой установки, а не ошибка.
@@ -1354,6 +1353,9 @@ export function apply(ctx) {
         const infobases = listInfoBases();
         json(res, 200, {
           ok: true,
+          // Движок поднимается последним и под try: сломанный движок не должен отменять
+          // маршруты параметров проекта. Причину показываем в карточке, а не только в логе.
+          engineError,
           paramsRel: PARAMS_REL,
           commonFile: COMMON_FILE,
           common,
@@ -1720,4 +1722,21 @@ export function apply(ctx) {
     stopPlatformContext();
     Promise.resolve(withdrawPlatformContext()).catch(() => {});
   });
+  // Движок rlm-tools-bsl (раньше — отдельный плагин dsh-rlm-tools-bsl): MCP-сервер анализа кода
+  // 1С, индексы проектов, раздел настроек. Роуты остались под /rlm.
+  // Поднимается последним и под try: движок владеет /rlm/*, как когда-то владел ими отдельный
+  // плагин, и если тот ещё грузится из профиля, регистрация бросает. Тогда теряются индексы и
+  // MCP, а параметры проекта обязаны открыться — их маршруты уже зарегистрированы выше.
+  // Автозапуск выключается в тестах и при диагностике — флагом окружения.
+  try {
+    applyRlm(ctx, { autoStart: process.env.DSH_1CPROPS_NO_RLM !== "1" });
+    engineError = null;
+  } catch (error) {
+    engineError = error?.message || String(error);
+    try {
+      ctx?.logger?.error?.("rlm-tools-bsl: движок не поднялся: " + engineError);
+    } catch {
+      // Логгер недоступен — причина всё равно отдаётся в /1cprops/state.
+    }
+  }
 }
