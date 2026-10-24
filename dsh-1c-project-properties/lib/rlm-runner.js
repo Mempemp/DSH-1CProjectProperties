@@ -878,6 +878,9 @@ function saveSettings(rt, patch) {
 
 const INDEX_COMMAND = process.platform === "win32" ? "rlm-bsl-index.exe" : "rlm-bsl-index";
 const INDEX_LOG = join(DIR, "logs", "index.log");
+
+/** Ответ CLI на неподдерживаемый формат источника: интерактивный вопрос или совет про флаг. */
+const UNSUPPORTED_FORMAT = /allow-unsupported-format|unsupported format|\\[y\\/N\\]/i;
 const INDEX_INFO_TIMEOUT_MS = 10_000;
 const INDEX_JOB_TIMEOUT_MS = 60 * 60 * 1000;
 const INDEX_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1094,6 +1097,7 @@ function indexJobSnapshot(rt) {
     code: job.code,
     error: job.error,
     auto: job.auto === true,
+    partial: job.partial === true,
     lines: job.lines.slice(-40),
   };
 }
@@ -1105,6 +1109,7 @@ function recordIndexResult(target, job) {
   if (!key && job.state !== "done") return;
   entry.lastAttemptAt = new Date().toISOString();
   entry.lastAction = job.action;
+  entry.partial = job.partial === true;
   if (job.state === "done") {
     entry.lastIndexAt = new Date().toISOString();
     entry.lastError = null;
@@ -1150,14 +1155,13 @@ function startIndexJob(rt, path, action, options = {}) {
     // журнала ещё нет
   }
   appendIndexLog(`\n===== ${new Date().toISOString()} index ${job.action} ${target}\n`);
-  const child = spawn(cli, ["index", job.action, target], {
-    cwd: DIR,
-    env: { ...process.env, ...effectiveConfig(rt).config.env },
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  job.pid = child.pid ?? null;
-  rt.index.job = job;
+  const cliEnv = {
+    ...process.env,
+    ...effectiveConfig(rt).config.env,
+    // CLI печатает ответы в кодировке консоли: без этого русский текст в журнале превращается в мусор.
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
   const collect = (chunk) => {
     const text = chunk.toString("utf8");
     appendIndexLog(text);
@@ -1165,8 +1169,6 @@ function startIndexJob(rt, path, action, options = {}) {
     job.lines.push(...lines);
     if (job.lines.length > 200) job.lines.splice(0, job.lines.length - 200);
   };
-  child.stdout?.on("data", collect);
-  child.stderr?.on("data", collect);
   const finish = (state, code, error) => {
     if (job.state !== "running") return;
     job.state = state;
@@ -1181,16 +1183,48 @@ function startIndexJob(rt, path, action, options = {}) {
     }
     job.resolve(indexJobSnapshot(rt));
   };
-  child.on("error", (error) => finish("failed", -1, error?.message || String(error)));
-  child.on("exit", (code) => {
-    clearTimeout(timer);
-    finish(code === 0 ? "done" : "failed", code, code === 0 ? null : "index завершился с кодом " + code);
-  });
-  const timer = setTimeout(() => {
-    killTree(job.pid);
-    finish("failed", null, "таймаут: " + Math.round(INDEX_JOB_TIMEOUT_MS / 60000) + " мин");
-  }, INDEX_JOB_TIMEOUT_MS);
-  timer.unref?.();
+  // Источник, который CLI не считает поддерживаемым (выгрузка конфигурации в файлы против EDT),
+  // раньше упирался в интерактивный вопрос «продолжить? [y/N]»: stdin закрыт, вопрос превращался
+  // в ошибку, и индекс не собирался никогда. Повторяем один раз с явным флагом и помечаем такой
+  // индекс неполным — это честнее, чем молча ждать полного.
+  const launch = (extraArgs, retry) => {
+    if (extraArgs.length > 0) {
+      appendIndexLog("\n" + "формат источника не cf/EDT: повтор с " + extraArgs.join(" ") + " — индекс будет неполным\n");
+    }
+    const child = spawn(cli, ["index", job.action, ...extraArgs, target], {
+      cwd: DIR,
+      env: cliEnv,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    job.pid = child.pid ?? null;
+    rt.index.job = job;
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    const timer = setTimeout(() => {
+      killTree(job.pid);
+      finish("failed", null, "таймаут: " + Math.round(INDEX_JOB_TIMEOUT_MS / 60000) + " мин");
+    }, INDEX_JOB_TIMEOUT_MS);
+    timer.unref?.();
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      finish("failed", -1, error?.message || String(error));
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        finish("done", 0, null);
+        return;
+      }
+      if (!retry && UNSUPPORTED_FORMAT.test(job.lines.slice(-40).join("\n"))) {
+        job.partial = true;
+        launch(["--allow-unsupported-format"], true);
+        return;
+      }
+      finish("failed", code, "index завершился с кодом " + code);
+    });
+  };
+  launch([], false);
   return job;
 }
 

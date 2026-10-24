@@ -613,6 +613,14 @@ window.__ModuleLoader__.load({
                   children: ["Последняя попытка ", whenText(project.lastAttemptAt), " прошла, но индекса в итоге нет."],
                 })
               : null,
+            project && project.partial && !running
+              ? jsxs("div", {
+                  className: "p1c-note p1c-note--warn",
+                  children: [
+                    "Индекс собран в неполном режиме: формат исходников не cf и не 1С:EDT, поэтому метаданные и навигация по объектам не гарантируются — доступен только поиск по тексту BSL. Для полного индекса выгрузите конфигурацию в файлы средствами Конфигуратора.",
+                  ],
+                })
+              : null,
             data && data.logFile && project && project.lastError && !running
               ? jsxs("div", { className: "p1c-note p1c-mono", children: ["журнал: ", String(data.logFile)] })
               : null,
