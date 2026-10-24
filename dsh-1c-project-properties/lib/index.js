@@ -9,7 +9,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { connect as netConnect } from "node:net";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   deployRules,
   readPayload,
@@ -668,7 +670,13 @@ async function startDesignerJob(operation, req, res) {
   }
 
   const common = readCommon();
-  const params = readParams(projectPath).params;
+  // Параметры из запроса сильнее файла проекта: визард проверяет подключение до
+  // сохранения, и введённое в поля должно проверяться ровно как введено.
+  const params = { ...readParams(projectPath).params };
+  const override = body?.params && typeof body.params === "object" ? body.params : {};
+  for (const key of PARAM_KEYS) {
+    if (typeof override[key] === "string") params[key] = override[key];
+  }
   const platform = resolvePlatform(params.platformPath || common.platformPath);
   if (platform.error) return json(res, 400, { ok: false, error: platform.error });
   const base = resolveBase(params.infobasePath);
@@ -695,7 +703,7 @@ async function startDesignerJob(operation, req, res) {
           ". Загрузка из такого каталога заменит конфигурацию базы пустой — сначала выгрузите конфигурацию в файлы.",
       });
     }
-  } else {
+  } else if (operation !== "check") {
     try {
       mkdirSync(targetDir, { recursive: true });
     } catch (error) {
@@ -778,6 +786,7 @@ async function startDesignerJob(operation, req, res) {
   }
   job.child = child;
 
+  const timeoutMs = DUMP_TIMEOUT_MS;
   const timer = setTimeout(() => {
     if (job.state !== "running") return;
     try {
@@ -785,9 +794,9 @@ async function startDesignerJob(operation, req, res) {
     } catch {}
     job.state = "failed";
     job.finishedAt = Date.now();
-    job.error = spec.label + " превысила лимит " + Math.round(DUMP_TIMEOUT_MS / 60000) + " мин и была остановлена";
+    job.error = spec.label + " превысила лимит " + Math.round(timeoutMs / 60000) + " мин и была остановлена";
     job.log = (job.log + "\n" + decodeLog(logFile)).slice(-JOB_TAIL_CHARS);
-  }, DUMP_TIMEOUT_MS);
+  }, timeoutMs);
 
   const finalize = () => {
     clearTimeout(timer);
@@ -920,6 +929,253 @@ function describePayload() {
     version: payload.ok ? payload.manifest?.version ?? "" : "",
     derived: payload.ok ? payload.derived === true : false,
   };
+}
+
+// ── визард: что лежит в папке проекта ──────────────────────────────────────
+//
+// Визард добавления проекта спрашивает «это проект 1С?» и подсказывает ответ по
+// содержимому папки. Проверка дешёвая: известные файлы в корне плюс ограниченный
+// проход по вложенным папкам в поисках исходников .bsl.
+
+const DETECT_BUDGET = 4000;
+const DETECT_DEPTH = 4;
+
+function hasBslSources(dir, depth, budget) {
+  if (depth > DETECT_DEPTH || budget.left <= 0) return false;
+  let entries = [];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    budget.left -= 1;
+    if (budget.left <= 0) return false;
+    if (entry.isFile()) {
+      if (entry.name.toLowerCase().endsWith(".bsl")) return true;
+      continue;
+    }
+    if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") {
+      if (hasBslSources(join(dir, entry.name), depth + 1, budget)) return true;
+    }
+  }
+  return false;
+}
+
+function detectProject(projectPath) {
+  const info = readParams(projectPath);
+  const markers = [];
+  if (existsSync(join(projectPath, "Configuration.xml"))) markers.push("выгрузка конфигурации в файлы");
+  if (existsSync(join(projectPath, "ConfigDumpInfo.xml"))) markers.push("файл версий выгрузки");
+  if (existsSync(join(projectPath, "src", "Configuration", "Configuration.xml"))) markers.push("исходники проекта 1С:EDT");
+  if (existsSync(join(projectPath, "DT-INF"))) markers.push("служебные файлы 1С");
+  if (hasBslSources(projectPath, 0, { left: DETECT_BUDGET })) markers.push("исходные тексты модулей");
+  return {
+    ok: true,
+    path: projectPath,
+    is1c: markers.length > 0 || info.hasFile,
+    markers,
+    hasParams: info.hasFile,
+    hasRules: existsSync(join(projectPath, PARAMS_DIR, "rules-1c")),
+    hasDump: existsSync(join(projectPath, "Configuration.xml")),
+    params: info.params,
+  };
+}
+
+
+// ── визард: быстрая проверка пути к базе ───────────────────────────────────
+//
+// Открывать Конфигуратор ради «правильно ли указан путь» дорого: платформа
+// читает конфигурацию целиком, и на большой базе это десятки секунд. Сначала
+// проверяем то, что видно без неё: есть ли каталог базы с файлом 1Cv8.1CD,
+// отвечает ли сервер 1С по своему порту, находится ли платформа.
+
+function tcpReachable(host, port, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch {}
+      resolve(value);
+    };
+    const socket = netConnect({ host, port });
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+async function checkBaseLocally(base) {
+  if (base.error) return { label: "База", ok: false, detail: base.error };
+  const filePath = base.arg.startsWith("/F") ? base.arg.slice(2) : "";
+  if (filePath) {
+    if (!isDirectory(filePath)) return { label: "База", ok: false, detail: "папка базы не найдена: " + filePath };
+    const hasData = existsSync(join(filePath, "1Cv8.1CD"));
+    return {
+      label: "База",
+      ok: hasData,
+      detail: hasData ? "файл 1Cv8.1CD на месте" : "в папке нет файла 1Cv8.1CD: " + filePath,
+    };
+  }
+  const raw = base.arg.slice(2);
+  const slash = raw.indexOf("\\");
+  const server = slash >= 0 ? raw.slice(0, slash) : raw;
+  const ref = slash >= 0 ? raw.slice(slash + 1) : "";
+  const colon = server.lastIndexOf(":");
+  const host = colon > 0 ? server.slice(0, colon) : server;
+  const port = colon > 0 ? Number(server.slice(colon + 1)) || 1541 : 1541;
+  const reachable = await tcpReachable(host, port);
+  return {
+    label: "Сервер",
+    ok: reachable,
+    detail: reachable ? host + ":" + port + " отвечает" : host + ":" + port + " не отвечает" + (ref ? " (база " + ref + ")" : ""),
+  };
+}
+
+// ── проверка подключения: внешнее соединение ───────────────────────────────
+//
+// Пакетный Конфигуратор для вопроса «верный ли путь и пароль» слишком дорог.
+// /CheckConfig читает и проверяет всю конфигурацию (30–128 с, замечания не про
+// подключение), /DumpCfg пишет файл размером с конфигурацию (на УТ 11.5 —
+// 839 МБ) и берёт конфигурацию базы на изменение. Внешнее соединение
+// V83.COMConnector делает ровно нужное: авторизуется, открывает базу на чтение
+// и отдаёт Метаданные.Версия — 2–3 с, при живых пользователях, без блокировок,
+// без процессов 1С. Так это устроено в CF_Extractor (app/com_connector.py).
+//
+// В Node COM нет, поэтому мост — PowerShell: lib/com-check.ps1 получает строку
+// соединения переменной окружения (пароль не ходит по командной строке) и
+// пишет вердикт JSON-файлом, чтобы не зависеть от кодовой страницы консоли.
+
+const LIB_DIR = dirname(fileURLToPath(import.meta.url));
+const COM_SCRIPT = join(LIB_DIR, "com-check.ps1");
+const COM_TIMEOUT_MS = 45 * 1000;
+
+/** Строка внешнего соединения из тех же данных, что уходят Конфигуратору. */
+export function buildComConnectionString(base, params = {}) {
+  if (base.error) return { error: base.error };
+  const parts = [];
+  if (base.arg.startsWith("/F")) {
+    parts.push('File="' + base.arg.slice(2) + '";');
+  } else if (base.arg.startsWith("/S")) {
+    const raw = base.arg.slice(2);
+    const slash = raw.indexOf("\\");
+    const server = slash >= 0 ? raw.slice(0, slash) : raw;
+    const ref = slash >= 0 ? raw.slice(slash + 1) : "";
+    if (!server || !ref) return { error: "в строке соединения нет сервера или имени базы: " + raw };
+    parts.push('Srvr="' + server + '";');
+    parts.push('Ref="' + ref + '";');
+  } else {
+    return { error: "непонятный путь к базе: " + base.arg };
+  }
+  if (params.user) parts.push('Usr="' + params.user + '";');
+  if (params.password) parts.push('Pwd="' + params.password + '";');
+  return { value: parts.join("") };
+}
+
+/** PowerShell той же разрядности, что платформа: COM-класс регистрируется под неё. */
+export function pickPowerShell(platformExe) {
+  const exe = String(platformExe || "").toLowerCase();
+  if (exe.includes("program files (x86)")) {
+    const wow = join(process.env.SystemRoot || "C:\\Windows", "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (existsSync(wow)) return { exe: wow, bitness: 32 };
+  }
+  return { exe: "powershell.exe", bitness: 64 };
+}
+
+/** Текст платформы вместо кода COM: пользователю нужен смысл, а не HRESULT. */
+function comErrorText(message) {
+  const text = String(message || "").trim();
+  if (/80040154|class not registered|класс не зарегистрирован/i.test(text)) {
+    return "компонент внешнего соединения 1С не зарегистрирован — платформа установлена без него " +
+      "или его разрядность не совпадает с разрядностью платформы";
+  }
+  if (/800401F3|invalid class string|invalid syntax/i.test(text) && !text.includes("Пользователь")) {
+    return "компонент внешнего соединения 1С недоступен: " + text;
+  }
+  return text;
+}
+
+/**
+ * Соединиться с базой тем составом данных, что указан в проекте.
+ * Возвращает { ok, version, error, elapsedMs, bitness }.
+ */
+function runComCheck(platformExe, connectionString) {
+  const shell = pickPowerShell(platformExe);
+  const jobDir = join(DSH_HOME, "1c-project-properties", "jobs");
+  mkdirSync(jobDir, { recursive: true });
+  const outFile = join(jobDir, "com-" + Date.now() + ".json");
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(value);
+    };
+    let child;
+    try {
+      child = spawn(shell.exe, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", COM_SCRIPT], {
+        windowsHide: true,
+        stdio: "ignore",
+        env: { ...process.env, P1C_CONN: connectionString, P1C_OUT: outFile },
+      });
+    } catch (error) {
+      return finish({ ok: false, error: "не удалось запустить проверку: " + (error?.message || error) });
+    }
+    const timer = setTimeout(() => {
+      try {
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      } catch {}
+      try {
+        unlinkSync(outFile);
+      } catch {}
+      finish({
+        ok: false,
+        error: "база не ответила за " + Math.round(COM_TIMEOUT_MS / 1000) + " с — проверьте путь и доступность сервера",
+      });
+    }, COM_TIMEOUT_MS);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: "PowerShell: " + (error?.message || error) });
+    });
+    child.on("exit", () => {
+      clearTimeout(timer);
+      const data = readJson(outFile);
+      try {
+        unlinkSync(outFile);
+      } catch {}
+      if (!data || typeof data !== "object") {
+        return finish({ ok: false, error: "проверка не вернула результат" });
+      }
+      if (data.ok === true) return finish({ ok: true, version: String(data.version || ""), bitness: shell.bitness });
+      finish({ ok: false, error: comErrorText(data.error) || "база не открылась", bitness: shell.bitness });
+    });
+  });
+}
+
+// ── визард: серверы MCP приложения ─────────────────────────────────────────
+//
+// MCP-менеджер держит список серверов в своём каталоге внутри $DSH_HOME. Читаем
+// его как есть и только читаем: включать и выключать серверы — дело панели
+// менеджера, визарду нужно показать, что уже подключено к агенту.
+
+const MCP_MANAGER_STORE = join(DSH_HOME, "@wingsky-1", "dsh-mcp-manager", "mcp.json");
+
+function listMcpServers() {
+  const raw = readJson(MCP_MANAGER_STORE);
+  if (!raw || !Array.isArray(raw.servers)) {
+    return { ok: true, available: false, file: MCP_MANAGER_STORE, servers: [] };
+  }
+  const servers = raw.servers
+    .filter((server) => server && typeof server.name === "string" && server.name.trim())
+    .map((server) => ({
+      name: server.name.trim(),
+      enabled: server.enabled !== false,
+    }));
+  return { ok: true, available: true, file: MCP_MANAGER_STORE, servers };
 }
 
 // ── платформенный контекст (MCP) ────────────────────────────────────────────
@@ -1264,6 +1520,41 @@ export function apply(ctx) {
       startDesignerJob("extensions", req, res);
     },
   });
+  // Проверка подключения внешним соединением: тот же состав данных, что уходит
+  // Конфигуратору, но без запуска Конфигуратора — 2–3 с, база не блокируется.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/check-connection",
+    handler: async (req, res) => {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const projectPath = canonical(String(body?.path ?? "").trim());
+        if (!isDirectory(projectPath)) return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        const common = readCommon();
+        const params = { ...readParams(projectPath).params };
+        const override = body?.params && typeof body.params === "object" ? body.params : {};
+        for (const key of PARAM_KEYS) {
+          if (typeof override[key] === "string") params[key] = override[key];
+        }
+        const platform = resolvePlatform(params.platformPath || common.platformPath);
+        if (platform.error) return json(res, 400, { ok: false, error: platform.error });
+        const base = resolveBase(params.infobasePath);
+        const connection = buildComConnectionString(base, params);
+        if (connection.error) return json(res, 400, { ok: false, error: connection.error });
+        const startedAt = Date.now();
+        const result = await runComCheck(platform.exe, connection.value);
+        return json(res, 200, {
+          ok: result.ok === true,
+          elapsedMs: Date.now() - startedAt,
+          version: result.version || "",
+          error: result.error || "",
+          bitness: result.bitness || 0,
+        });
+      } catch (error) {
+        json(res, 400, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-status", handler: dumpStatus });
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-cancel", handler: cancelDump });
 
@@ -1315,6 +1606,65 @@ export function apply(ctx) {
         }
         const result = removeRules({ projectPath, force: body?.force === true });
         json(res, result.ok ? 200 : 400, result);
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  // Определение проекта 1С по папке — для визарда добавления проекта.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/detect",
+    handler: (req, res) => {
+      try {
+        const target = new URL(req.url, "http://127.0.0.1").searchParams.get("path");
+        if (!target) return json(res, 400, { ok: false, error: "параметр path обязателен" });
+        if (!isAbsolute(target)) return json(res, 400, { ok: false, error: "нужен абсолютный путь к папке проекта" });
+        const projectPath = canonical(target);
+        if (!isDirectory(projectPath)) return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        json(res, 200, detectProject(projectPath));
+      } catch (error) {
+        json(res, 400, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  // Быстрая проверка пути к базе и платформы — без запуска Конфигуратора.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/path-check",
+    handler: async (req, res) => {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const projectPath = canonical(String(body?.path ?? "").trim());
+        if (!isDirectory(projectPath)) return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
+        const common = readCommon();
+        const params = { ...readParams(projectPath).params };
+        const override = body?.params && typeof body.params === "object" ? body.params : {};
+        for (const key of PARAM_KEYS) {
+          if (typeof override[key] === "string") params[key] = override[key];
+        }
+        const platform = resolvePlatform(params.platformPath || common.platformPath);
+        const base = resolveBase(params.infobasePath);
+        const checks = [
+          { label: "Платформа", ok: !platform.error, detail: platform.error || platform.exe },
+          await checkBaseLocally(base),
+        ];
+        json(res, 200, { ok: true, okAll: checks.every((item) => item.ok), checks });
+      } catch (error) {
+        json(res, 400, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  // Серверы MCP приложения — только чтение, для последнего шага визарда.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/mcp-servers",
+    handler: (_req, res) => {
+      try {
+        json(res, 200, listMcpServers());
       } catch (error) {
         json(res, 500, { ok: false, error: error?.message || String(error) });
       }

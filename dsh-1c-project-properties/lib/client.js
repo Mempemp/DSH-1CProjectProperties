@@ -184,6 +184,7 @@ window.__ModuleLoader__.load({
 }
 .p1c-dialog__head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 14px; border-bottom: 1px solid var(--p1c-border); }
 .p1c-dialog__headmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.p1c-dialog__title { font-size: 15px; font-weight: 600; }
 .p1c-dialog__project { font-size: 13px; font-weight: 600; }
 .p1c-dialog__path { font-size: 11.5px; opacity: .6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p1c-dialog__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
@@ -227,6 +228,27 @@ window.__ModuleLoader__.load({
 .p1c-job__dir { font-size: 11.5px; opacity: .62; word-break: break-all; }
 .p1c-stack { display: flex; flex-direction: column; gap: 14px; }
 .p1c-stack--tight { gap: 6px; }
+.p1c-overlay { pointer-events: auto; }
+.p1c-rows { display: flex; flex-direction: column; gap: 8px; }
+.p1c-row { display: flex; align-items: baseline; gap: 12px; font-size: 12.5px; }
+.p1c-row__key { flex: 0 0 auto; min-width: 96px; opacity: .62; }
+.p1c-row__value { flex: 1 1 auto; min-width: 0; font-weight: 500; word-break: break-word; }
+/* Шаги визарда: серая полоса на весь путь, текущий шаг — зелёным свечением. */
+/* Окно визарда одной высоты на всех шагах: страницы не раскачивают его размер.
+   Считано по самой большой странице — «База и платформа». */
+.p1c-dialog__body--wizard { height: 470px; max-height: calc(100vh - 236px); overflow-y: auto; scrollbar-gutter: stable; }
+.p1c-check-line--status { font-size: 12px; align-items: center; min-height: 18px; }
+.p1c-card .p1c-details { margin-top: 2px; }
+.p1c-details .p1c-grid { margin-top: 8px; }
+.p1c-steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 4px; }
+.p1c-step { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.p1c-step__bar { height: 3px; border-radius: 2px; background: rgba(127,127,127,.26); transition: background-color .18s ease, box-shadow .18s ease; }
+.p1c-step__label { font-size: 10.5px; line-height: 1.3; opacity: .42; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1c-step.is-done .p1c-step__bar { background: var(--p1c-ok); }
+.p1c-step.is-current .p1c-step__bar { background: var(--p1c-ok); box-shadow: 0 0 10px 2px rgba(76,175,80,.55); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--p1c-ok) 55%, transparent); }
+.p1c-step.is-current .p1c-step__label { opacity: .9; }
+.p1c-check-line { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.p1c-check-line .p1c-dot { margin-top: 0; }
 `;
 
     let stylesInjected = false;
@@ -433,6 +455,952 @@ window.__ModuleLoader__.load({
     };
 
     const JOB_TONE = { running: null, done: "ok", failed: "err", cancelled: "err" };
+
+    // ── визард добавления проекта ─────────────────────────────────────────────
+    //
+    // Кнопка добавления проекта в DSH создаёт воркспейс и ничего не спрашивает.
+    // Плагин подхватывает это создание: если в папке ещё нет .dsh/1c-project.json,
+    // показываем визард из пяти шагов и раскладываем то, что нужно проекту 1С —
+    // база, платформа, правила, выгрузка. Обычный проект закрывает визард на
+    // первом шаге, и в его папке ничего не появляется.
+
+    const WIZARD_STEPS = 5;
+    const WIZARD_PLATFORM_LIST = "dsh-1cprops-wizard-platforms";
+    const WIZARD_INFOBASE_LIST = "dsh-1cprops-wizard-infobases";
+    const WIZARD_HOOK = "__dsh1cProjectWizard";
+
+    let wizardRequest = null;
+    const wizardListeners = new Set();
+
+    function notifyWizard() {
+      for (const listener of wizardListeners) {
+        try {
+          listener();
+        } catch {}
+      }
+    }
+
+    function openWizard(request) {
+      wizardRequest = { ...request, openedAt: Date.now() };
+      notifyWizard();
+    }
+
+    function closeWizard() {
+      wizardRequest = null;
+      notifyWizard();
+    }
+
+    function useWizardRequest() {
+      const [value, setValue] = useState(wizardRequest);
+      useEffect(() => {
+        const listener = () => setValue(wizardRequest);
+        wizardListeners.add(listener);
+        return () => {
+          wizardListeners.delete(listener);
+        };
+      }, []);
+      return value;
+    }
+
+    /**
+     * Создан воркспейс — спрашиваем хост, что лежит в папке. Визард открывается
+     * всегда, кроме одного случая: у проекта уже есть файл параметров, то есть
+     * его настраивали раньше. Отказ хоста — молчание: визард не обязан быть.
+     */
+    async function offerWizard(workspace) {
+      const path = workspace && typeof workspace.path === "string" ? workspace.path : "";
+      if (!path) return;
+      let found = null;
+      try {
+        found = await request("/detect?path=" + encodeURIComponent(path));
+      } catch {
+        return;
+      }
+      if (!found || found.hasParams === true) return;
+      openWizard({ path, title: workspace.title || path, detect: found });
+    }
+
+    /**
+     * Создание воркспейса идёт через службу workspaces, и другого пути у кнопки
+     * «добавить проект» нет: и боковая панель, и пустой экран диалога зовут её же.
+     * Оборачиваем метод и возвращаем как было при выгрузке плагина.
+     */
+    function installCreateHook(ctx) {
+      if (typeof ctx.inject !== "function") return;
+      ctx.inject(["workspaces"], (wctx) => {
+        const service = (wctx && wctx.workspaces) || (typeof wctx.get === "function" ? wctx.get("workspaces") : null);
+        if (!service || typeof service.create !== "function") return;
+        const original = service.create;
+        if (original[WIZARD_HOOK]) return;
+        const wrapped = async function create(input) {
+          const workspace = await original.call(service, input);
+          Promise.resolve()
+            .then(() => offerWizard(workspace))
+            .catch(() => {});
+          return workspace;
+        };
+        Object.defineProperty(wrapped, WIZARD_HOOK, { value: true });
+        Object.defineProperty(service, "create", { value: wrapped, writable: true, configurable: true });
+        if (typeof wctx.effect === "function") {
+          wctx.effect(() => () => {
+            if (service.create === wrapped) delete service.create;
+          });
+        }
+      });
+    }
+
+    /** Короткая причина отказа префлайта: в статусе нужен смысл, а не путь. */
+    function shortPathError(result) {
+      const bad = ((result && result.checks) || []).find((item) => !item.ok);
+      if (!bad) return "проверка не прошла";
+      if (bad.label === "Платформа") return "платформа 1С не найдена";
+      if (bad.label === "База") return "базы по указанному пути нет";
+      if (bad.label === "Сервер") return "сервер 1С не отвечает";
+      return bad.detail || "проверка не прошла";
+    }
+
+    /** Слот общего слоя: визард показывается над приложением, а не внутри настроек. */
+    function WizardHost() {
+      const current = useWizardRequest();
+      if (!current) return null;
+      return jsx(Wizard, { key: String(current.openedAt), request: current, onClose: closeWizard });
+    }
+
+    function Radio(props) {
+      return jsxs("label", {
+        className: cx("p1c-check-row", props.disabled && "is-disabled"),
+        htmlFor: props.id,
+        children: [
+          jsx("input", {
+            id: props.id,
+            type: "radio",
+            name: props.name,
+            checked: props.checked,
+            disabled: props.disabled,
+            onChange: props.onChange,
+          }),
+          jsx("span", { children: props.children }),
+        ],
+      });
+    }
+
+    function Row(props) {
+      return jsxs("div", {
+        className: "p1c-row",
+        children: [
+          jsx("span", { className: "p1c-row__key", children: props.label }),
+          jsx("span", {
+            className: cx("p1c-row__value", props.tone && "p1c-text--" + props.tone),
+            children: props.value,
+          }),
+        ],
+      });
+    }
+
+    /** Отчёт развёртывания правил: один и тот же на шаге визарда и в окне проекта. */
+    function RulesReport(props) {
+      const result = props.result;
+      if (!result) return null;
+      const summary = result.summary
+        ? Object.entries(RESULT_LABEL)
+            .filter(([key]) => Number(result.summary[key]) > 0)
+            .map(([key, label]) => label + ": " + result.summary[key])
+            .join(" · ")
+        : "";
+      const preserved = (result.files || []).filter((file) => file.status === "preserved");
+      return jsxs("div", {
+        className: "p1c-stack p1c-stack--tight",
+        children: [
+          jsx("div", {
+            className: cx("p1c-sm p1c-strong", result.ok === false && "p1c-text--err"),
+            children:
+              result.ok === false
+                ? "Развернуть не удалось"
+                : result.dryRun
+                  ? "Предпросмотр (ничего не записано)"
+                  : "Развёртывание выполнено",
+          }),
+          result.ok === false
+            ? jsx("div", { className: "p1c-note p1c-note--err", children: String(result.error || "причина не сообщена") })
+            : jsx("div", { className: "p1c-note", children: summary || "изменений нет" }),
+          ...(result.notes || []).map((note, index) =>
+            jsx("div", { key: "n" + index, className: "p1c-note", children: note }),
+          ),
+          ...(result.warnings || []).map((warning, index) =>
+            jsx("div", { key: "w" + index, className: "p1c-note p1c-note--warn", children: warning }),
+          ),
+          preserved.length
+            ? jsxs("div", {
+                className: "p1c-note",
+                children: [
+                  jsx("div", { children: "Оставлено ваше (" + preserved.length + "):" }),
+                  ...preserved.slice(0, 3).map((file, index) =>
+                    jsx("div", { key: index, className: "p1c-mono", children: file.path + (file.detail ? " — " + file.detail : "") }),
+                  ),
+                  preserved.length > 3 ? jsx("div", { children: "и ещё " + (preserved.length - 3) }) : null,
+                ],
+              })
+            : null,
+        ],
+      });
+    }
+
+    function Wizard(props) {
+      const { request: target, onClose } = props;
+      const [state, setState] = useState(null);
+      const [step, setStep] = useState(0);
+      const [detect, setDetect] = useState(target.detect || null);
+      const [is1c, setIs1c] = useState(target.detect ? Boolean(target.detect.is1c) : null);
+      const [form, setForm] = useState({ ...EMPTY_FORM, ...((target.detect && target.detect.params) || {}) });
+      const [showPassword, setShowPassword] = useState(false);
+      const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
+      const [rulesResult, setRulesResult] = useState(null);
+      const [runOptions, setRunOptions] = useState(EMPTY_RUN);
+      const [job, setJob] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [status, setStatus] = useState(null);
+      const [baseSaved, setBaseSaved] = useState(false);
+      const [mcp, setMcp] = useState(null);
+      const [pathCheck, setPathCheck] = useState(null);
+      const [connection, setConnection] = useState(null);
+      const [checking, setChecking] = useState(false);
+      // Что уже лежит в файле параметров: по этому признаку визард понимает,
+      // есть ли что сохранять при уходе с шага. Он же и есть второе хранилище — файл проекта.
+      const [lastSaved, setLastSaved] = useState(
+        JSON.stringify({ ...EMPTY_FORM, ...((target.detect && target.detect.params) || {}) }),
+      );
+
+      injectStyles();
+
+      useEffect(() => {
+        const onKeyDown = (event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            onClose();
+          }
+        };
+        document.addEventListener("keydown", onKeyDown, true);
+        return () => document.removeEventListener("keydown", onKeyDown, true);
+      }, [onClose]);
+
+      useEffect(() => {
+        let alive = true;
+        request("/state")
+          .then((data) => {
+            if (alive) setState(data);
+          })
+          .catch((error) => {
+            if (alive) setStatus({ kind: "error", text: String((error && error.message) || error) });
+          });
+        return () => {
+          alive = false;
+        };
+      }, []);
+
+      const refreshJob = useCallback(async () => {
+        try {
+          const data = await request("/dump-status");
+          setJob(data.job);
+        } catch {}
+      }, []);
+
+      useEffect(() => {
+        if (step === 2 || step === 3) refreshJob();
+      }, [step, refreshJob]);
+
+      useEffect(() => {
+        if (!job || job.state !== "running") return;
+        const timer = setInterval(refreshJob, 2000);
+        return () => clearInterval(timer);
+      }, [job && job.state, refreshJob]);
+
+      useEffect(() => {
+        if (step !== 4) return;
+        let alive = true;
+        request("/mcp-servers")
+          .then((data) => {
+            if (alive) setMcp(data);
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [step]);
+
+      const running = Boolean(job && job.state === "running");
+      const locked = busy || running;
+
+      const saveBase = () =>
+        request("/project-save", {
+          method: "POST",
+          body: JSON.stringify({ path: target.path, params: form }),
+        }).then((data) => {
+          setBaseSaved(true);
+          setLastSaved(JSON.stringify(form));
+          return data;
+        });
+
+      const dirty = JSON.stringify(form) !== lastSaved;
+
+      const submitBase = async () => {
+        setBusy(true);
+        setStatus(null);
+        try {
+          await saveBase();
+          setStatus({ kind: "ok", text: "Параметры базы сохранены" });
+          setStep(2);
+        } catch (error) {
+          setStatus({ kind: "error", text: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const deployRules = async () => {
+        setBusy(true);
+        setStatus(null);
+        try {
+          const result = await request("/rules-deploy", {
+            method: "POST",
+            body: JSON.stringify({
+              path: target.path,
+              includePassword: rulesOptions.includePassword,
+              useEdt: rulesOptions.useEdt,
+            }),
+          });
+          setRulesResult(result);
+        } catch (error) {
+          setRulesResult({ ok: false, error: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      // Одна кнопка, две ступени внутри неё. Сначала мгновенное и без 1С: путь к
+      // платформе, каталог базы и файл 1Cv8.1CD, доступность сервера — звать
+      // платформу незачем, если каталога нет. Затем внешнее соединение: платформа
+      // авторизуется и открывает базу на чтение, без Конфигуратора и без блокировок.
+      const runCheck = async () => {
+        setBusy(true);
+        setChecking(true);
+        setStatus(null);
+        setPathCheck(null);
+        setConnection(null);
+        try {
+          const local = await request("/path-check", {
+            method: "POST",
+            body: JSON.stringify({ path: target.path, params: form }),
+          });
+          setPathCheck(local);
+          if (!local.okAll) return;
+          const data = await request("/check-connection", {
+            method: "POST",
+            body: JSON.stringify({ path: target.path, params: form }),
+          });
+          setConnection(data);
+        } catch (error) {
+          setStatus({ kind: "error", text: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+          setChecking(false);
+        }
+      };
+
+      const leaveDump = async () => {
+        if (!dirty) {
+          setStep(4);
+          return;
+        }
+        setBusy(true);
+        setStatus(null);
+        try {
+          await saveBase();
+          setStep(4);
+        } catch (error) {
+          setStatus({ kind: "error", text: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const startDump = async () => {
+        setBusy(true);
+        setStatus(null);
+        try {
+          await saveBase();
+          const data = await request("/dump-start", {
+            method: "POST",
+            body: JSON.stringify({
+              path: target.path,
+              dir: form.dumpDir,
+              format: runOptions.format,
+              update: runOptions.update,
+              cleanLocks: runOptions.cleanLocks,
+            }),
+          });
+          setJob(data.job);
+        } catch (error) {
+          setStatus({ kind: "error", text: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const cancelDump = async () => {
+        setBusy(true);
+        try {
+          const data = await request("/dump-cancel", { method: "POST", body: JSON.stringify({ path: target.path }) });
+          setJob(data.job);
+        } catch (error) {
+          setStatus({ kind: "error", text: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const platforms = (state && state.platforms) || [];
+      const infoBases = (state && state.infobases) || [];
+      const commonPlatform = (state && state.common && state.common.platformPath) || "";
+      const rulesPayload = (state && state.rulesPayload) || null;
+      const rulesPayloadOk = Boolean(rulesPayload && rulesPayload.ok);
+      const canRun = Boolean(form.infobasePath) && baseSaved;
+
+      const statusLine = status
+        ? jsxs("div", {
+            className: "p1c-status",
+            children: [
+              jsx(Dot, { className: "p1c-status__dot", tone: status.kind === "ok" ? "ok" : "err" }),
+              jsx("div", {
+                className: cx("p1c-sm", status.kind === "ok" ? "p1c-text--ok" : "p1c-text--err"),
+                children: status.text,
+              }),
+            ],
+          })
+        : null;
+
+      const markers = (detect && detect.markers) || [];
+      const detectHint = markers.length
+        ? "Похоже на 1С: " + markers[0] + (markers.length > 1 ? " и ещё " + (markers.length - 1) : "") + "."
+        : "Признаков 1С в папке не нашёл.";
+
+      const stepKind = jsx(Card, {
+        title: "Это проект 1С?",
+        hint: "Если проект не 1С, окно закроется — в его папке ничего не появится.",
+        children: jsxs("div", {
+          className: "p1c-stack p1c-stack--tight",
+          children: [
+            jsxs("div", {
+              className: "p1c-options",
+              children: [
+                jsx(Radio, {
+                  id: "p1c-wizard-yes",
+                  name: "p1c-wizard-kind",
+                  checked: is1c === true,
+                  onChange: () => setIs1c(true),
+                  children: "Да, это проект 1С",
+                }),
+                jsx(Radio, {
+                  id: "p1c-wizard-no",
+                  name: "p1c-wizard-kind",
+                  checked: is1c === false,
+                  onChange: () => setIs1c(false),
+                  children: "Нет, обычный проект",
+                }),
+              ],
+            }),
+            jsx("div", { className: "p1c-note", title: markers.join("; "), children: detectHint }),
+          ],
+        }),
+      });
+
+      // Статус проверки — одна горизонтальная строка. Пути к базе и платформе тут
+      // лишние: они и так в полях выше, в статусе нужен только вердикт.
+      const checkTone = checking
+        ? "warn"
+        : connection
+          ? connection.ok
+            ? "ok"
+            : "err"
+          : pathCheck && !pathCheck.okAll
+            ? "err"
+            : "";
+      const checkText = checking
+        ? "Проверяю подключение…"
+        : connection
+          ? connection.ok
+            ? "Подключение работает" + (connection.elapsedMs ? " · " + (connection.elapsedMs / 1000).toFixed(1) + " с" : "")
+            : connection.error || "База не открылась"
+          : pathCheck && !pathCheck.okAll
+            ? shortPathError(pathCheck)
+            : "";
+      const checkLine = checkText
+        ? jsxs("div", {
+            className: "p1c-check-line p1c-check-line--status",
+            children: [
+              jsx(Dot, { key: "dot", tone: checkTone }),
+              jsx("span", { key: "text", className: checkTone === "err" ? "p1c-text--err" : undefined, children: checkText }),
+            ],
+          })
+        : null;
+
+      const stepBase = jsxs("div", {
+        className: "p1c-stack",
+        children: [
+          jsx(Card, {
+            title: "База 1С",
+            children: [
+              jsxs("div", {
+                className: "p1c-grid",
+                children: [
+                  jsx(Field, {
+                    wide: true,
+                    htmlFor: "p1c-wizard-infobase",
+                    label: "Путь к базе",
+                    children: jsx("input", {
+                      id: "p1c-wizard-infobase",
+                      className: "p1c-input",
+                      list: WIZARD_INFOBASE_LIST,
+                      autoFocus: true,
+                      value: form.infobasePath,
+                      placeholder: 'C:/Базы/Бухгалтерия  либо  Srvr="server";Ref="buh";',
+                      onChange: (e) => setForm((f) => ({ ...f, infobasePath: e.target.value })),
+                    }),
+                  }),
+                  jsx(Field, {
+                    htmlFor: "p1c-wizard-user",
+                    label: "Пользователь",
+                    children: jsx("input", {
+                      id: "p1c-wizard-user",
+                      className: "p1c-input",
+                      value: form.user,
+                      onChange: (e) => setForm((f) => ({ ...f, user: e.target.value })),
+                    }),
+                  }),
+                  jsx(Field, {
+                    htmlFor: "p1c-wizard-password",
+                    label: "Пароль",
+                    labelExtra: jsx(Check, {
+                      compact: true,
+                      checked: showPassword,
+                      onChange: (e) => setShowPassword(e.target.checked),
+                      children: "показать",
+                    }),
+                    hint: "Открытым текстом в файле проекта.",
+                    children: jsx("input", {
+                      id: "p1c-wizard-password",
+                      className: "p1c-input",
+                      type: showPassword ? "text" : "password",
+                      value: form.password,
+                      onChange: (e) => setForm((f) => ({ ...f, password: e.target.value })),
+                    }),
+                  }),
+                ],
+              }),
+              jsxs("details", {
+                className: "p1c-details",
+                children: [
+                  jsx(Summary, { children: "Дополнительно: код доступа и платформа" }),
+                  jsxs("div", {
+                    className: "p1c-grid",
+                    children: [
+                      jsx(Field, {
+                        htmlFor: "p1c-wizard-unlock",
+                        label: "Код доступа к базе",
+                        hint: "Нужен, если на базе стоит блокировка соединений (/UC).",
+                        children: jsx("input", {
+                          id: "p1c-wizard-unlock",
+                          className: "p1c-input",
+                          value: form.unlockCode,
+                          placeholder: "пусто — без кода",
+                          onChange: (e) => setForm((f) => ({ ...f, unlockCode: e.target.value })),
+                        }),
+                      }),
+                      jsx(Field, {
+                        htmlFor: "p1c-wizard-platform",
+                        label: "Платформа для проекта",
+                        hint: form.platformPath
+                          ? "Путь задан для этого проекта."
+                          : commonPlatform
+                            ? "Пусто — берётся общее значение из настроек."
+                            : "Общее значение не задано — укажите путь к платформе.",
+                        children: jsx("input", {
+                          id: "p1c-wizard-platform",
+                          className: "p1c-input",
+                          list: WIZARD_PLATFORM_LIST,
+                          value: form.platformPath,
+                          placeholder: commonPlatform || "C:/Program Files/1cv8/…/bin/1cv8.exe",
+                          onChange: (e) => setForm((f) => ({ ...f, platformPath: e.target.value })),
+                        }),
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          jsxs("div", {
+            className: "p1c-actions",
+            children: [
+              jsx(Btn, {
+                variant: "primary",
+                disabled: busy || running || !form.infobasePath,
+                title: form.infobasePath
+                  ? "1С подключится к базе этими данными — пара секунд, без Конфигуратора"
+                  : "Сначала укажите путь к базе",
+                onClick: runCheck,
+                children: checking ? "Проверяю…" : "Проверить подключение",
+              }),
+            ],
+          }),
+          checkLine,
+          jsx("datalist", {
+            id: WIZARD_PLATFORM_LIST,
+            children: platforms.map((p) => jsx("option", { key: p.path, value: p.path, children: p.version })),
+          }),
+          jsx("datalist", {
+            id: WIZARD_INFOBASE_LIST,
+            children: infoBases.map((b) => jsx("option", { key: b.value, value: b.value, children: b.name })),
+          }),
+        ],
+      });
+
+      const stepRules = jsx(Card, {
+        title: "Навыки для работы агента с 1С",
+        hint: jsxs("span", {
+          children: [
+            "Набор ",
+            jsx("a", { className: "p1c-link", href: RULES_REPO, target: "_blank", rel: "noreferrer", children: "1c-rules" }),
+            " — правила, навыки и команды. Разворачивается в проект: .dsh/skills и AGENTS.md.",
+          ],
+        }),
+        children: jsxs("div", {
+          className: "p1c-stack",
+          children: [
+            rulesPayloadOk
+              ? null
+              : jsx("div", {
+                  className: "p1c-note p1c-note--warn",
+                  children:
+                    "Набор «1c-rules» в DSH не найден: " +
+                    ((rulesPayload && rulesPayload.root) || "$DSH_HOME/1c-rules") +
+                    ". Его кладёт DSH Desktop при первом запуске.",
+                }),
+            jsxs("div", {
+              className: "p1c-options",
+              children: [
+                jsx(Check, {
+                  checked: rulesOptions.useEdt,
+                  disabled: busy || !rulesPayloadOk,
+                  onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
+                  title: "В EDT другой набор исходников — ссылки в правилах переписываются под его структуру",
+                  children: "проект ведётся в 1С:EDT (другая структура исходников)",
+                }),
+                jsx(Check, {
+                  checked: rulesOptions.includePassword,
+                  disabled: busy || !rulesPayloadOk,
+                  title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
+                  onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
+                  children: "записать пароль базы в .dev.env",
+                }),
+              ],
+            }),
+            jsx("div", {
+              className: "p1c-actions",
+              children: jsx(Btn, {
+                variant: "primary",
+                disabled: busy || !rulesPayloadOk,
+                onClick: deployRules,
+                children: "Развернуть правила",
+              }),
+            }),
+            jsx(RulesReport, { result: rulesResult }),
+          ],
+        }),
+      });
+
+      const stepDump = jsx(Card, {
+        title: "Выгрузка конфигурации",
+        hint: "Конфигуратор выгружает конфигурацию базы в XML-файлы. Пока идёт операция, база занята.",
+        children: jsxs("div", {
+          className: "p1c-stack",
+          children: [
+            jsxs("div", {
+              className: "p1c-grid",
+              children: [
+                jsx(Field, {
+                  htmlFor: "p1c-wizard-dumpdir",
+                  label: "Каталог выгрузки",
+                  hint: "Пусто — корень проекта.",
+                  children: jsx("input", {
+                    id: "p1c-wizard-dumpdir",
+                    className: "p1c-input",
+                    value: form.dumpDir,
+                    placeholder: "пусто — корень проекта",
+                    onChange: (e) => setForm((f) => ({ ...f, dumpDir: e.target.value })),
+                  }),
+                }),
+                jsx("div", {
+                  className: "p1c-field p1c-field--format",
+                  children: [
+                    jsx("label", { className: "p1c-label", htmlFor: "p1c-wizard-format", children: "Формат выгрузки" }),
+                    jsxs("select", {
+                      id: "p1c-wizard-format",
+                      className: "p1c-select",
+                      value: runOptions.format,
+                      disabled: running,
+                      onChange: (e) => setRunOptions((o) => ({ ...o, format: e.target.value })),
+                      children: [
+                        jsx("option", { value: "Hierarchical", children: "иерархический" }),
+                        jsx("option", { value: "Plain", children: "плоский" }),
+                      ],
+                    }),
+                  ],
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "p1c-options",
+              children: [
+                jsx(Check, {
+                  checked: runOptions.update,
+                  disabled: running,
+                  title: "Выгружать только изменившиеся объекты (DESIGNER -update -force)",
+                  onChange: (e) => setRunOptions((o) => ({ ...o, update: e.target.checked })),
+                  children: "только изменения",
+                }),
+                jsx(Check, {
+                  checked: runOptions.cleanLocks,
+                  disabled: running,
+                  title: "Удалить lock-файлы .cfl файловой базы перед запуском",
+                  onChange: (e) => setRunOptions((o) => ({ ...o, cleanLocks: e.target.checked })),
+                  children: "снять .cfl перед запуском",
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "p1c-actions",
+              children: [
+                running
+                  ? jsx(Btn, { variant: "danger", disabled: busy, onClick: cancelDump, children: "Отменить выгрузку" })
+                  : jsx(Btn, {
+                      variant: "primary",
+                      disabled: locked || !canRun,
+                      title: "DESIGNER /DumpConfigToFiles — выгрузить конфигурацию в файлы",
+                      onClick: startDump,
+                      children: "Выгрузить в файлы",
+                    }),
+                !canRun
+                  ? jsx("span", {
+                      className: "p1c-note",
+                      children: form.infobasePath
+                        ? "Путь к базе введён, но не сохранён — нажмите «Назад» и «Далее» на шаге с базой."
+                        : "Сначала укажите путь к базе на шаге «База 1С».",
+                    })
+                  : null,
+              ],
+            }),
+            job && job.state !== "idle" && job.path === target.path
+              ? jsxs("div", {
+                  className: "p1c-stack p1c-stack--tight",
+                  children: [
+                    jsx(JobBox, { job }),
+                    job.log && job.state !== "running"
+                      ? jsxs("details", {
+                          className: "p1c-details",
+                          children: [
+                            jsx(Summary, { children: "Лог Конфигуратора" }),
+                            jsx("pre", { className: "p1c-log", children: job.log }),
+                          ],
+                        })
+                      : null,
+                  ],
+                })
+              : null,
+          ],
+        }),
+      });
+
+      const effectivePlatform = form.platformPath || commonPlatform;
+      const rulesSummary = rulesResult && rulesResult.ok
+        ? "развёрнуты"
+        : detect && detect.hasRules
+          ? "уже были в проекте"
+          : "не развёрнуты";
+      const connected = Boolean(connection && connection.ok);
+      const dumpSummary = job && job.operation === "dump" && job.state === "done"
+        ? "выгружена" + (job.files ? ", файлов " + job.files : "")
+        : detect && detect.hasDump
+          ? "в проекте есть"
+          : "не делалась";
+
+      const platformCtx = (state && state.platformContext) || null;
+      const mcpRows = [];
+      if (platformCtx) {
+        mcpRows.push(
+          jsx(Row, {
+            key: "platform-context",
+            label: "Справка по API платформы",
+            value: platformCtx.indexLoaded
+              ? "подключена"
+              : platformCtx.running
+                ? "запущена, индекс платформы не собран"
+                : platformCtx.pathMissing
+                  ? "не подключена: путь к платформе не задан"
+                  : "не подключена",
+            tone: platformCtx.indexLoaded ? undefined : "warn",
+          }),
+        );
+      }
+      // Серверы — одной строкой, а не по строке на сервер: иначе итоговый шаг
+      // растёт вместе с бандлом и окно визарда приходится прокручивать.
+      const enabledServers = [];
+      const disabledServers = [];
+      for (const server of mcp && mcp.available ? mcp.servers : []) {
+        if (server.name === "1c-platform-context") continue;
+        (server.enabled ? enabledServers : disabledServers).push(server.name);
+      }
+      if (enabledServers.length > 0 || disabledServers.length > 0) {
+        mcpRows.push(
+          jsx(Row, {
+            key: "mcp-servers",
+            label: "Серверы бандла",
+            value: [
+              enabledServers.length > 0 ? enabledServers.join(", ") : "все выключены",
+              disabledServers.length > 0 ? "выключены: " + disabledServers.join(", ") : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            tone: enabledServers.length > 0 ? undefined : "warn",
+          }),
+        );
+      }
+
+      const stepDone = jsxs("div", {
+        className: "p1c-stack",
+        children: [
+          jsx(Card, {
+            title: "Что настроено",
+            children: jsxs("div", {
+              className: "p1c-rows",
+              children: [
+                jsx(Row, { label: "База 1С", value: form.infobasePath || "не указана" }),
+                jsx(Row, { label: "Подключение", value: connected ? "проверено" : "не проверялось" }),
+                jsx(Row, { label: "Платформа", value: effectivePlatform || "не задана" }),
+                jsx(Row, { label: "Навыки 1С", value: rulesSummary }),
+                jsx(Row, { label: "Выгрузка", value: dumpSummary }),
+              ],
+            }),
+          }),
+          mcpRows.length
+            ? jsx(Card, {
+                title: "Серверы MCP",
+                hint: "Общие для приложения: работают во всех проектах и переключаются в панели MCP.",
+                children: jsx("div", { className: "p1c-rows", children: mcpRows }),
+              })
+            : null,
+          jsx(Card, {
+            title: "Где это лежит",
+            children: jsx("div", {
+              className: "p1c-note",
+              children: "Параметры — .dsh/1c-project.json. Изменить позже: Настройки → 1С: Параметры проектов.",
+            }),
+          }),
+        ],
+      });
+
+      const bodyByStep = [stepKind, stepBase, stepRules, stepDump, stepDone];
+      const stepNames = ["Проект 1С", "База и платформа", "Навыки", "Выгрузка", "Готово"];
+
+      const stepsBar = jsx("div", {
+        className: "p1c-steps",
+        role: "progressbar",
+        "aria-valuemin": 1,
+        "aria-valuemax": WIZARD_STEPS,
+        "aria-valuenow": step + 1,
+        children: stepNames.map((name, index) =>
+          jsxs("div", {
+            key: name,
+            className: cx("p1c-step", index < step && "is-done", index === step && "is-current"),
+            children: [
+              jsx("span", { className: "p1c-step__bar", title: name }),
+              jsx("span", { className: "p1c-step__label", children: name }),
+            ],
+          }),
+        ),
+      });
+
+      const primaryButton = (() => {
+        if (step === 0) {
+          return jsx(Btn, {
+            variant: "primary",
+            disabled: is1c === null,
+            onClick: () => (is1c ? setStep(1) : onClose()),
+            children: is1c === false ? "Готово" : "Далее",
+          });
+        }
+        if (step === 1) {
+          return jsx(Btn, { variant: "primary", disabled: busy, onClick: submitBase, children: "Далее" });
+        }
+        if (step === 2) {
+          return jsx(Btn, { variant: "primary", onClick: () => setStep(3), children: "Далее" });
+        }
+        if (step === 3) {
+          return jsx(Btn, {
+            variant: "primary",
+            disabled: running || busy,
+            title: running ? "Дождитесь окончания выгрузки" : undefined,
+            onClick: leaveDump,
+            children: "Далее",
+          });
+        }
+        return jsx(Btn, { variant: "primary", onClick: onClose, children: "Готово" });
+      })();
+
+      return portal(
+        jsxs("div", {
+          className: "p1c-root p1c-overlay",
+          children: [
+            jsx("div", { className: "p1c-mask", onClick: onClose, "aria-hidden": "true" }),
+            jsxs("div", {
+              className: "p1c-dialog",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-label": "Настройка проекта 1С",
+              children: [
+                jsxs("div", {
+                  className: "p1c-dialog__head",
+                  children: [
+                    jsxs("div", {
+                      className: "p1c-dialog__headmain",
+                      children: [
+                        jsx("div", { className: "p1c-dialog__title", children: "Настройка проекта 1С" }),
+                        jsx("div", { className: "p1c-dialog__project", children: target.title }),
+                        jsx("div", { className: "p1c-dialog__path p1c-mono", title: target.path, children: target.path }),
+                      ],
+                    }),
+                    jsx(Btn, { variant: "icon", title: "Закрыть", onClick: onClose, children: jsx(CloseIcon, {}) }),
+                  ],
+                }),
+                jsxs("div", {
+                  className: "p1c-dialog__body p1c-dialog__body--wizard",
+                  children: [stepsBar, statusLine, bodyByStep[step]],
+                }),
+                jsxs("div", {
+                  className: "p1c-dialog__foot",
+                  children: [
+                    jsxs("div", {
+                      className: "p1c-dialog__footleft",
+                      children: [step > 0 ? jsx(Btn, { disabled: locked, onClick: () => setStep(step - 1), children: "Назад" }) : null],
+                    }),
+                    jsx("div", { className: "p1c-dialog__footright", children: primaryButton }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    }
 
     /** Модальное окно параметров одного проекта. */
     function ProjectDialog(props) {
@@ -1426,6 +2394,15 @@ window.__ModuleLoader__.load({
           Section,
         ),
       );
+      // Визард живёт в общем слое поверх приложения: он показывается сразу после
+      // добавления проекта, а не внутри панели настроек.
+      ctx.slots.inject("shell.overlay", () =>
+        ctx.slots.register(
+          { name: "shell.overlay", id: "1c-project-wizard", order: 300 },
+          WizardHost,
+        ),
+      );
+      installCreateHook(ctx);
     }
 
     return { apply, inject: ["slots"] };
