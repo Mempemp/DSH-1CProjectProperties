@@ -381,6 +381,7 @@ const hookValues = [
   false, // baseSaved
   null, // mcp
   false, // indexRlm
+  "", // indexPath — папка выгрузки для индексации
   null, // pathCheck
   null, // connection
   false, // checking

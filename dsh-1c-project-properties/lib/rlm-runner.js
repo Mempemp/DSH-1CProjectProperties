@@ -9,7 +9,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 const ROUTE = "/rlm";
 const SERVER_NAME = "rlm-tools-bsl";
@@ -570,7 +570,14 @@ function createRuntime(ctx, config) {
     mcpRegistration: [],
     lastError: null,
     lastExit: null,
-    index: { job: null, jobSeq: 0, infoCache: new Map(), autoTimer: null },
+    index: {
+      job: null,
+      jobSeq: 0,
+      infoCache: new Map(),
+      infoPending: new Map(),
+      wanted: new Set(),
+      autoTimer: null,
+    },
   };
 }
 
@@ -881,7 +888,11 @@ const INDEX_LOG = join(DIR, "logs", "index.log");
 
 /** Ответ CLI на неподдерживаемый формат источника: интерактивный вопрос или совет про флаг. */
 const UNSUPPORTED_FORMAT = /allow-unsupported-format|unsupported format|\\[y\\/N\\]/i;
-const INDEX_INFO_TIMEOUT_MS = 10_000;
+// Проверка свежести обходит всё дерево проекта: 4 с на боевой базе, дольше на медленном
+// диске. Этот таймаут никто не ждёт синхронно — карточка отвечает из кэша.
+const INDEX_INFO_TIMEOUT_MS = 60_000;
+// Сколько ждём проверку там, где ответ нужен сразу: клик по галочке «индексировать».
+const INDEX_STATE_WAIT_MS = 8_000;
 const INDEX_JOB_TIMEOUT_MS = 60 * 60 * 1000;
 const INDEX_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const INDEX_INFO_TTL_MS = 15_000;
@@ -981,6 +992,26 @@ function indexRoot(rt) {
   return join(homedir(), ".cache", "rlm-tools-bsl");
 }
 
+// Что индексировать. Проект в DSH — папка репозитория, а выгрузка Конфигуратора может лежать
+// вложенно или вообще в другом месте, и угадать это нельзя: путь знает только человек. Поэтому
+// он задаётся в параметрах проекта (rlmIndexPath), а по умолчанию индексируется папка проекта.
+function projectIndexPathRaw(path) {
+  try {
+    const data = readJson(join(path, ".dsh", "1c-project.json"));
+    return data && typeof data.rlmIndexPath === "string" ? data.rlmIndexPath.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function projectIndexPath(path) {
+  const base = normalizeIndexPath(path);
+  const raw = projectIndexPathRaw(path);
+  if (!raw) return base;
+  // Относительный путь считается от папки проекта: так настройка едет вместе с проектом.
+  return normalizeIndexPath(isAbsolute(raw) ? raw : join(base, raw));
+}
+
 function parseIndexInfo(text) {
   const pick = (re) => {
     const match = String(text).match(re);
@@ -1017,12 +1048,14 @@ function runIndexInfo(cli, key, env) {
   return new Promise((resolvePromise) => {
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const child = spawn(cli, ["index", "info", key], {
       windowsHide: true,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill();
       } catch {
@@ -1037,11 +1070,11 @@ function runIndexInfo(cli, key, env) {
     });
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolvePromise({ code: -1, text: String(error?.message || error) });
+      resolvePromise({ code: -1, text: String(error?.message || error), timedOut });
     });
     child.on("exit", (code) => {
       clearTimeout(timer);
-      resolvePromise({ code: code ?? -1, text: stdout + stderr });
+      resolvePromise({ code: code ?? -1, text: stdout + stderr, timedOut });
     });
   });
 }
@@ -1065,11 +1098,23 @@ async function indexInfo(rt, path, fresh = false) {
     value = { ok: true, ...parsed, status: normalizeIndexStatus(parsed.statusText) };
   } else if (/not found|не найден|missing|нет индекса/i.test(text)) {
     value = { ok: true, status: "missing", statusText: "missing", error: text.trim().split("\n").slice(-3).join(" ") };
+  } else if (run.timedOut) {
+    // Проверка не уложилась в таймаут: это не «индекс сломан», а «дерево слишком большое или
+    // диск медленный». Молчаливое «код -1» человек прочитать не может.
+    value = {
+      ok: false,
+      status: "unknown",
+      error:
+        "проверка не уложилась в " + Math.round(INDEX_INFO_TIMEOUT_MS / 1000) + " с: каталог большой или диск медленный. " +
+        "Сборку и обновление это не запрещает — их можно запустить кнопкой.",
+    };
+  } else if (!text.trim()) {
+    value = { ok: false, status: "error", error: "средство индексации не ответило: запуск rlm-bsl-index не удался" };
   } else {
     value = {
       ok: false,
       status: "error",
-      error: text.trim().split("\n").slice(-5).join(" ") || "index info завершился с кодом " + run.code,
+      error: text.trim().split("\n").slice(-5).join(" "),
     };
   }
   rt.index.infoCache.set(cacheKey, { at: Date.now(), value });
@@ -1091,6 +1136,8 @@ function indexJobSnapshot(rt) {
     state: job.state,
     action: job.action,
     path: job.path,
+    // Папка проекта: карточка сверяет с ней задание, хотя работа идёт по корню выгрузки.
+    project: job.project || job.path,
     startedAt: job.startedAt,
     elapsedMs: job.startedMs ? Date.now() - job.startedMs : 0,
     code: job.code,
@@ -1121,9 +1168,14 @@ function recordIndexResult(target, job) {
 }
 
 function startIndexJob(rt, path, action, options = {}) {
-  const target = normalizeIndexPath(path);
-  if (!target) throw Object.assign(new Error("не указан путь проекта"), { statusCode: 400 });
-  if (!existsSync(target)) throw Object.assign(new Error("папка проекта не найдена: " + target), { statusCode: 400 });
+  const project = normalizeIndexPath(path);
+  if (!project) throw Object.assign(new Error("не указан путь проекта"), { statusCode: 400 });
+  if (!existsSync(project)) throw Object.assign(new Error("папка проекта не найдена: " + project), { statusCode: 400 });
+  // В работу идёт папка выгрузки из параметров проекта (по умолчанию — сам проект).
+  const target = projectIndexPath(project);
+  if (target !== project && !existsSync(target)) {
+    throw Object.assign(new Error("папка выгрузки не найдена: " + target + " — поправьте путь в параметрах проекта"), { statusCode: 400 });
+  }
   if (rt.index.job && rt.index.job.state === "running") {
     throw Object.assign(new Error("уже идёт " + rt.index.job.action + " индекса: " + rt.index.job.path), { statusCode: 409 });
   }
@@ -1132,6 +1184,7 @@ function startIndexJob(rt, path, action, options = {}) {
   const job = {
     id: ++rt.index.jobSeq,
     path: target,
+    project,
     action: action === "update" ? "update" : "build",
     state: "running",
     startedAt: new Date().toISOString(),
@@ -1176,7 +1229,7 @@ function startIndexJob(rt, path, action, options = {}) {
     job.finishedAt = new Date().toISOString();
     rt.index.infoCache.delete(target.toLowerCase());
     try {
-      recordIndexResult(target, job);
+      recordIndexResult(job.project || target, job);
     } catch {
       // запись настроек не должна скрывать результат сборки
     }
@@ -1236,7 +1289,7 @@ function cancelIndexJob(rt) {
   job.error = job.error || "отменено";
   rt.index.infoCache.delete(job.path.toLowerCase());
   try {
-    recordIndexResult(job.path, job);
+    recordIndexResult(job.project || job.path, job);
   } catch {
     // см. выше
   }
@@ -1248,6 +1301,67 @@ function cancelIndexJob(rt) {
 // Нужен, чтобы GET /index/state не плодил прогоны при каждом перечитывании.
 const indexAutoOpened = new Set();
 
+// Проверка свежести — отдельный процесс CLI: секунды на обычном проекте и минуты на дереве с
+// мусором. Карточка её не ждёт (состояние отдаётся из кэша, устаревшее обновляется в фоне),
+// поэтому таймаут длинный: 10 с не хватало, прогон убивался и статус читался как ошибка.
+function probeIndexInfo(rt, projectPath, target) {
+  const key = target.toLowerCase();
+  const pending = rt.index.infoPending.get(key);
+  if (pending) return pending;
+  const promise = indexInfo(rt, target, true)
+    .catch(() => null)
+    .then((value) => {
+      rt.index.infoPending.delete(key);
+      // Проверка закончилась — время исполнить обещание «соберём, если индекса нет».
+      let started = false;
+      if (value) {
+        try {
+          started = autoBuildIfWanted(rt, projectPath, value);
+        } catch (error) {
+          logInfo(rt, "сборка индекса после проверки: " + (error?.message || String(error)));
+        }
+      }
+      return { value, started };
+    });
+  rt.index.infoPending.set(key, promise);
+  return promise;
+}
+
+// Сборка отсутствующего индекса по намерению пользователя: открыл карточку проекта или включил
+// флаг. Решение принимается по результату проверки, а не по факту клика: до неё неизвестно,
+// есть индекс или нет, а карточка больше не ждёт проверку.
+function autoBuildIfWanted(rt, projectPath, info) {
+  const key = projectPath.toLowerCase();
+  if (!rt.index.wanted.has(key)) return false;
+  if (indexAutoOpened.has(key)) return false;
+  if (rt.index.job && rt.index.job.state === "running") return false;
+  if (!info || !info.ok || info.status !== "missing") return false;
+  const config = readIndexConfig();
+  const entryKey = indexProjectKey(config.projects, projectPath);
+  const entry = entryKey ? config.projects[entryKey] : null;
+  const flag = projectIndexFlag(projectPath);
+  const enabled = flag !== null ? flag : entry ? entry.enabled !== false : false;
+  if (!enabled) return false;
+  indexAutoOpened.add(key);
+  try {
+    const job = startIndexJob(rt, projectPath, "build", { auto: true });
+    job.promise
+      .then(() => {
+        // Неудача не должна закрывать проект до перезапуска: следующий раз соберём снова.
+        if (job.state !== "done") indexAutoOpened.delete(key);
+      })
+      .catch((error) => {
+        indexAutoOpened.delete(key);
+        logInfo(rt, "сборка индекса при открытии проекта: " + (error?.message || String(error)));
+      });
+    return true;
+  } catch (error) {
+    indexAutoOpened.delete(key);
+    logInfo(rt, "сборка индекса при открытии проекта: " + (error?.message || String(error)));
+    return false;
+  }
+}
+
 async function indexState(rt, rawPath, options = {}) {
   const config = readIndexConfig();
   const path = normalizeIndexPath(rawPath);
@@ -1256,41 +1370,45 @@ async function indexState(rt, rawPath, options = {}) {
   const fileFlag = path ? projectIndexFlag(path) : null;
   const bin = detectIndexCommand();
   const enabled = fileFlag !== null ? fileFlag : entry ? entry.enabled !== false : false;
-  const index = path ? await indexInfo(rt, path) : null;
-  // Открытие проекта — обещанный в подсказке триггер сборки, которого не было: авто-проход
-  // знает только проекты, попавшие в settings после первого прогона, поэтому новый проект с
-  // включённым флагом навсегда оставался «индекса нет» без единой попытки и без ошибки.
-  // Запускаем только по явному признаку открытия карточки: обычное чтение состояния не должно
-  // стартовать многочасовую сборку.
+  // Папка выгрузки — из параметров проекта; по умолчанию папка проекта.
+  const indexPath = path ? projectIndexPathRaw(path) : "";
+  const target = path ? projectIndexPath(path) : null;
+  // Флаги читаются из файла проекта за миллисекунды и без CLI: по ним карточка рисует галочку
+  // и поле пути, не дожидаясь проверки свежести.
+  if (options.flags === true) {
+    return { ok: true, bin, path, enabled, indexPath, checking: true };
+  }
+  if (path && options.open === true) rt.index.wanted.add(path.toLowerCase());
+  let index = null;
+  let checking = false;
+  // Автозапуск сборки живёт в одном месте — в колбэке проверки: два вызова подряд успевали
+  // запустить два задания, и второе падало с 409.
   let autoStarted = false;
-  if (
-    options.open === true &&
-    path &&
-    enabled &&
-    bin &&
-    index &&
-    index.ok &&
-    index.status === "missing" &&
-    !(rt.index.job && rt.index.job.state === "running") &&
-    !indexAutoOpened.has(path.toLowerCase())
-  ) {
-    indexAutoOpened.add(path.toLowerCase());
-    try {
-      const job = startIndexJob(rt, path, "build", { auto: true });
-      job.promise
-        .then(() => {
-          // Неудача не должна закрывать проект до перезапуска: следующий раз соберём снова.
-          if (job.state !== "done") indexAutoOpened.delete(path.toLowerCase());
-        })
-        .catch((error) => {
-          indexAutoOpened.delete(path.toLowerCase());
-          logInfo(rt, "сборка индекса при открытии проекта: " + (error?.message || String(error)));
-        });
-      autoStarted = true;
-    }
-    catch (error) {
-      indexAutoOpened.delete(path.toLowerCase());
-      logInfo(rt, "сборка индекса при открытии проекта: " + (error?.message || String(error)));
+  if (target) {
+    const cached = rt.index.infoCache.get(target.toLowerCase());
+    if (cached) {
+      index = cached.value;
+      // Свежее значение уже есть — решение о сборке принимается здесь: проверка не запускается,
+      // и второго запуска не будет.
+      autoStarted = autoBuildIfWanted(rt, path, index);
+      if (Date.now() - cached.at >= INDEX_INFO_TTL_MS) {
+        checking = true;
+        void probeIndexInfo(rt, path, target);
+      }
+    } else if (options.wait === true) {
+      const probed = await Promise.race([
+        probeIndexInfo(rt, path, target),
+        sleep(INDEX_STATE_WAIT_MS).then(() => null),
+      ]);
+      if (probed) {
+        index = probed.value;
+        autoStarted = probed.started === true;
+      } else {
+        checking = true;
+      }
+    } else {
+      checking = true;
+      void probeIndexInfo(rt, path, target);
     }
   }
   return {
@@ -1301,8 +1419,12 @@ async function indexState(rt, rawPath, options = {}) {
     logFile: INDEX_LOG,
     policy: { autoOnStart: config.autoOnStart, weekly: config.weekly },
     path,
+    // Что индексируется: папка проекта или заданная в параметрах папка выгрузки.
+    target: target ? { path: target, custom: indexPath !== "" } : null,
+    indexPath,
     enabled,
     autoStarted,
+    checking,
     project: entry
       ? {
           lastIndexAt: entry.lastIndexAt ?? null,
@@ -1332,7 +1454,7 @@ async function autoIndexPass(rt, reason) {
     if (reason === "tick" && last && now - last < INDEX_WEEK_MS) continue;
     let info;
     try {
-      info = await indexInfo(rt, path, true);
+      info = await indexInfo(rt, projectIndexPath(path), true);
     } catch {
       continue;
     }
@@ -1459,7 +1581,14 @@ export function applyRlm(ctx, config = {}) {
       try {
         const url = new URL(req.url, "http://127.0.0.1");
         // `open=1` — карточка проекта открылась: это триггер сборки, которого раньше не было.
-        json(res, 200, await indexState(rt, url.searchParams.get("path"), { open: url.searchParams.get("open") === "1" }));
+        json(
+          res,
+          200,
+          await indexState(rt, url.searchParams.get("path"), {
+            open: url.searchParams.get("open") === "1",
+            flags: url.searchParams.get("flags") === "1",
+          }),
+        );
       } catch (error) {
         json(res, 500, { ok: false, error: error?.message || String(error) });
       }
@@ -1485,7 +1614,9 @@ export function applyRlm(ctx, config = {}) {
         if (body.autoOnStart !== undefined) patch.autoOnStart = body.autoOnStart !== false;
         if (body.weekly !== undefined) patch.weekly = body.weekly !== false;
         writeIndexConfig(patch);
-        json(res, 200, await indexState(rt, path, { open: true }));
+        // Включение флага — единственное место, где ответ нужен вместе с готовым статусом:
+        // иначе «поставил галочку, а сборка не началась» снова вернётся.
+        json(res, 200, await indexState(rt, path, { open: true, wait: true }));
       } catch (error) {
         json(res, error?.statusCode || 400, { ok: false, error: error?.message || String(error) });
       }

@@ -1438,13 +1438,31 @@ export function apply(ctx) {
         }
         const file = paramsFile(projectPath);
         const current = readJson(file) ?? {};
-        if (body.enabled === undefined) {
-          return json(res, 200, { ok: true, path: projectPath, enabled: current.rlmIndex === true, file });
+        if (body.enabled === undefined && body.indexPath === undefined) {
+          return json(res, 200, {
+            ok: true,
+            path: projectPath,
+            enabled: current.rlmIndex === true,
+            indexPath: typeof current.rlmIndexPath === "string" ? current.rlmIndexPath : "",
+            file,
+          });
         }
-        current.rlmIndex = body.enabled !== false;
+        if (body.enabled !== undefined) current.rlmIndex = body.enabled !== false;
+        // Папка выгрузки: пустая строка — «как папка проекта», ключ из файла убираем.
+        if (body.indexPath !== undefined) {
+          const indexPath = String(body.indexPath ?? "").trim();
+          if (indexPath) current.rlmIndexPath = indexPath;
+          else delete current.rlmIndexPath;
+        }
         current.$schema = SCHEMA;
         writeJson(file, current);
-        json(res, 200, { ok: true, path: projectPath, enabled: current.rlmIndex, file });
+        json(res, 200, {
+          ok: true,
+          path: projectPath,
+          enabled: current.rlmIndex === true,
+          indexPath: typeof current.rlmIndexPath === "string" ? current.rlmIndexPath : "",
+          file,
+        });
       } catch (error) {
         json(res, 400, { ok: false, error: error?.message || String(error) });
       }

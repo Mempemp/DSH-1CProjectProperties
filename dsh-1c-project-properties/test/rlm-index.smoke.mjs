@@ -21,6 +21,18 @@ const ctx = {
   get: () => null,
 };
 
+// Проверка свежести идёт в фоне и не держит ответ: карточка получает «проверяю…» и опрашивает
+// состояние. Тест ждёт устойчивого значения.
+async function stateSettled(target, attempts = 40) {
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await request("/rlm/index/state?path=" + encodeURIComponent(target));
+    if (!last.body.checking) return last;
+    await new Promise((done) => setTimeout(done, 400));
+  }
+  throw new Error("состояние индекса так и не проверилось: " + JSON.stringify(last && last.body));
+}
+
 function request(url, body) {
   return new Promise((resolve, reject) => {
     const req = new EventEmitter();
@@ -58,11 +70,19 @@ try {
   await new Promise((done) => setTimeout(done, 1200));
 
   const project = mkdtempSync(join(tmpdir(), "rlm-index-project-"));
+  // Пустая папка не индексируется вовсе: сборка падает, и автосборка честно повторяет попытку.
+  // Для проверки маршрутов нужен хотя бы один модуль.
+  mkdirSync(join(project, "CommonModules", "Тест", "Ext"), { recursive: true });
+  writeFileSync(join(project, "CommonModules", "Тест", "Ext", "Module.bsl"), "Процедура Тест()\nКонецПроцедуры\n");
 
-  const state = await request("/rlm/index/state?path=" + encodeURIComponent(project));
-  assert.equal(state.code, 200);
-  assert.equal(state.body.ok, true);
-  assert.equal(state.body.enabled, false);
+  const first = await request("/rlm/index/state?path=" + encodeURIComponent(project));
+  assert.equal(first.code, 200);
+  assert.equal(first.body.ok, true);
+  assert.equal(first.body.enabled, false);
+  // Первый ответ не ждёт проверку CLI: статус приходит следующим чтением.
+  assert.equal(first.body.checking, true, "первое чтение отвечает до проверки свежести");
+  const state = await stateSettled(project);
+  assert.equal(state.body.checking, false);
   assert.ok(state.body.index, "статус индекса присутствует");
   assert.ok(typeof state.body.index.status === "string");
   assert.ok(!state.body.project || state.body.project.lastIndexAt === null);
@@ -112,11 +132,11 @@ try {
   assert.equal(settings2.port, 65202);
   assert.equal(settings2.index.projects[project].enabled, true);
 
-  const missingBin = await request("/rlm/index/state?path=" + encodeURIComponent(project));
+  const missingBin = await stateSettled(project);
   assert.ok(missingBin.body.bin, "CLI найден на этой машине");
 
   const job = await request("/rlm/index/job", { path: project, action: "build" });
-  assert.equal(job.code, 202);
+  assert.equal(job.code, 202, JSON.stringify(job.body));
   let jobState = job.body.job ? job.body.job.state : null;
   for (let attempt = 0; attempt < 60 && jobState === "running"; attempt += 1) {
     await new Promise((done) => setTimeout(done, 500));
@@ -126,7 +146,46 @@ try {
   assert.notEqual(jobState, "running", "задание завершилось");
   console.log("job:", jobState);
 
-  console.log("OK: index routes (state/config/save preservation, bad job path)");
+  // Вложенная выгрузка: проект — папка репозитория, выгрузка Конфигуратора лежит в src, рядом
+  // мусор (он в .gitignore и в индекс попадать не должен). Индексируется src, а не проект.
+  const nested = mkdtempSync(join(tmpdir(), "rlm-index-nested-"));
+  mkdirSync(join(nested, "src", "CommonModules", "Тест", "Ext"), { recursive: true });
+  writeFileSync(join(nested, "src", "Configuration.xml"), "<MetaDataObject/>");
+  writeFileSync(join(nested, "src", "CommonModules", "Тест", "Ext", "Module.bsl"), "Процедура Тест()\nКонецПроцедуры\n");
+  mkdirSync(join(nested, ".tmp"), { recursive: true });
+  writeFileSync(join(nested, ".tmp", "junk.bsl"), "Процедура Мусор()\nКонецПроцедуры\n");
+  mkdirSync(join(nested, ".dsh"), { recursive: true });
+  writeFileSync(join(nested, ".dsh", "1c-project.json"), JSON.stringify({ rlmIndex: true, rlmIndexPath: "src" }));
+
+  const nestedFlags = await request("/rlm/index/state?flags=1&path=" + encodeURIComponent(nested));
+  assert.equal(nestedFlags.body.enabled, true, "галочка читается из параметров проекта");
+  assert.equal(nestedFlags.body.indexPath, "src", "путь выгрузки отдаётся флагами, без CLI");
+
+  const nestedState = await stateSettled(nested);
+  assert.equal(nestedState.body.target.path, join(nested, "src"), "индексируется заданная папка выгрузки");
+  assert.equal(nestedState.body.target.custom, true, "путь не по умолчанию виден карточке");
+  assert.equal(nestedState.body.index.status, "missing");
+
+  const nestedJob = await request("/rlm/index/job", { path: nested, action: "build" });
+  assert.equal(nestedJob.code, 202, JSON.stringify(nestedJob.body));
+  assert.equal(nestedJob.body.job.project, nested, "карточка сверяет задание по папке проекта");
+  assert.equal(nestedJob.body.job.path, join(nested, "src"), "работа идёт по корню выгрузки");
+  assert.notEqual(await waitJob(nested), "running", "сборка вложенной выгрузки завершилась");
+
+  const nestedFresh = await stateSettled(nested);
+  assert.equal(nestedFresh.body.index.status, "fresh", "после сборки индекс свежий: " + JSON.stringify(nestedFresh.body.index));
+  assert.equal(nestedFresh.body.project.lastAction, "build");
+
+  // Путь задаётся параметрами проекта, а не угадывается: пустой — папка проекта,
+  // несуществующий — отказ с внятным текстом, а не «индекса нет».
+  const broken = mkdtempSync(join(tmpdir(), "rlm-index-broken-"));
+  mkdirSync(join(broken, ".dsh"), { recursive: true });
+  writeFileSync(join(broken, ".dsh", "1c-project.json"), JSON.stringify({ rlmIndex: true, rlmIndexPath: "нет-такой-папки" }));
+  const brokenJob = await request("/rlm/index/job", { path: broken, action: "build" });
+  assert.equal(brokenJob.code, 400);
+  assert.match(String(brokenJob.body.error), /папка выгрузки не найдена/);
+
+  console.log("OK: index routes (state/config/save preservation, bad job path, configured dump path)");
   console.log("bin:", missingBin.body.bin);
   console.log("status:", missingBin.body.index.status);
 } finally {

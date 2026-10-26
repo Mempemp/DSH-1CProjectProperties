@@ -470,6 +470,9 @@ window.__ModuleLoader__.load({
       const [data, setData] = useState(null);
       const [error, setError] = useState(null);
       const [busy, setBusy] = useState(false);
+      // Галочка — намерение из параметров проекта, а не вывод из статуса индекса.
+      const [flags, setFlags] = useState(null);
+      const [indexPathDraft, setIndexPathDraft] = useState("");
       const autoRef = useRef(false);
       // Первое чтение состояния после открытия карточки помечается как «проект открыт»:
       // плагин запускает по этой метке сборку отсутствующего индекса.
@@ -484,13 +487,16 @@ window.__ModuleLoader__.load({
           setData(next);
           setError(null);
           const status = next.index && next.index.status;
+          // «Структура изменилась» обновлением не лечится: update строит дельту по тому, что
+          // видит git, а проверка свежести обходит все папки — расхождение остаётся после каждого
+          // прогона. Такой статус требует полной пересборки, и запускает её человек, не автообновление.
           const running = next.job && next.job.state === "running";
           if (
             !silent &&
             !autoRef.current &&
             next.enabled &&
             !running &&
-            (status === "stale_age" || status === "stale_content" || status === "stale_structure")
+            (status === "stale_age" || status === "stale_content")
           ) {
             autoRef.current = true;
             await rlmRequest("/index/job", { method: "POST", body: JSON.stringify({ path, action: "update" }) }).catch(() => null);
@@ -507,7 +513,27 @@ window.__ModuleLoader__.load({
         load();
       }, [load]);
 
+      // Флаги читаются отдельным запросом: файл параметров проекта отдаётся за миллисекунды,
+      // без запуска CLI, поэтому галочка и путь не ждут проверку свежести.
       useEffect(() => {
+        let alive = true;
+        rlmRequest("/index/state?flags=1&path=" + encodeURIComponent(path))
+          .then((next) => {
+            if (!alive || !next) return;
+            setFlags(next);
+            setIndexPathDraft(typeof next.indexPath === "string" ? next.indexPath : "");
+          })
+          .catch(() => null);
+        return () => {
+          alive = false;
+        };
+      }, [path]);
+
+      useEffect(() => {
+        if (data && data.checking) {
+          const timer = setTimeout(() => load(true), 1200);
+          return () => clearTimeout(timer);
+        }
         if (!data || !data.job || data.job.state !== "running") return;
         const timer = setInterval(() => load(true), 2000);
         return () => clearInterval(timer);
@@ -520,8 +546,25 @@ window.__ModuleLoader__.load({
           // синхронизируется следом, чтобы автообновление знало путь.
           await request("/project-index", { method: "POST", body: JSON.stringify({ path, enabled }) });
           const next = await rlmRequest("/index/config", { method: "POST", body: JSON.stringify({ path, enabled }) });
+          setFlags((current) => ({ ...(current || {}), enabled }));
           setData(next);
           setError(null);
+        } catch (e) {
+          setError(e);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const saveIndexPath = async () => {
+        setBusy(true);
+        try {
+          const next = await request("/project-index", {
+            method: "POST",
+            body: JSON.stringify({ path, indexPath: indexPathDraft.trim() }),
+          });
+          setFlags((current) => ({ ...(current || {}), enabled: next.enabled, indexPath: next.indexPath || "" }));
+          await load(true);
         } catch (e) {
           setError(e);
         } finally {
@@ -554,13 +597,26 @@ window.__ModuleLoader__.load({
       const index = data && data.index ? data.index : null;
       const job = data && data.job ? data.job : null;
       const project = data && data.project ? data.project : null;
-      const sameJob = Boolean(job && job.path && job.path.toLowerCase() === path.toLowerCase());
+      const jobPath = job ? job.project || job.path : "";
+      const sameJob = Boolean(jobPath && jobPath.toLowerCase() === path.toLowerCase());
+      // Состояние ещё проверяется: галочка и статус не должны врать в это время.
+      const checking = Boolean(data && data.checking);
       const running = Boolean(job && job.state === "running" && sameJob);
       const anyRunning = Boolean(job && job.state === "running");
       const status = index ? index.status : "unknown";
       const info = INDEX_STATUS[status] || INDEX_STATUS.unknown;
-      const label = running ? (job.action === "update" ? "обновляется…" : "собирается…") : info.text;
-      const action = status === "missing" ? "build" : "update";
+      const label = running
+        ? job.action === "update"
+          ? "обновляется…"
+          : "собирается…"
+        : checking
+          ? "проверяю…"
+          : info.text;
+      // «Обновить» строит дельту по тому, что видит git, и не замечает файлы из .gitignore;
+      // проверка свежести обходит все папки. Для расхождения состава нужна полная пересборка.
+      const structureStale = status === "stale_structure";
+      const action = status === "missing" || structureStale ? "build" : "update";
+      const actionLabel = status === "missing" ? "Собрать" : structureStale ? "Пересобрать" : "Обновить";
       const canRun = Boolean(data && data.bin && data.enabled) && !anyRunning && !busy;
 
       return jsx(Card, {
@@ -571,7 +627,7 @@ window.__ModuleLoader__.load({
             jsxs("div", {
               style: { display: "flex", alignItems: "center", gap: 8 },
               children: [
-                jsx(Dot, { tone: running ? "warn" : info.tone }),
+                jsx(Dot, { tone: running ? "warn" : checking ? "" : info.tone }),
                 jsx("div", { className: "p1c-sm", children: label }),
                 anyRunning && !sameJob
                   ? jsx("div", { className: "p1c-note", children: "идёт операция по другому проекту" })
@@ -591,6 +647,12 @@ window.__ModuleLoader__.load({
                 })
               : null,
             index && index.dbPath ? jsx("div", { className: "p1c-note p1c-mono", children: index.dbPath }) : null,
+            data && data.target && data.target.custom
+              ? jsxs("div", {
+                  className: "p1c-note",
+                  children: ["Индексируется папка выгрузки: ", jsx("span", { className: "p1c-mono", children: data.target.path })],
+                })
+              : null,
             index && index.error && index.status !== "missing"
               ? jsx("div", { className: "p1c-note p1c-note--err", children: index.error })
               : null,
@@ -622,11 +684,36 @@ window.__ModuleLoader__.load({
             data && data.logFile && project && project.lastError && !running
               ? jsxs("div", { className: "p1c-note p1c-mono", children: ["журнал: ", String(data.logFile)] })
               : null,
+            structureStale && !running
+              ? jsx("div", {
+                  className: "p1c-note p1c-note--warn",
+                  children:
+                    "На диске не тот набор файлов .bsl, что записан в индексе. Обновление этот рассинхрон не убирает: оно видит только изменения, известные git, а папки из .gitignore для него не существуют. «Пересобрать» считает файлы обходом папок и снова сходится с проверкой.",
+                })
+              : null,
             jsx(Check, {
-              checked: Boolean(data && data.enabled),
-              disabled: busy || anyRunning,
+              checked: Boolean(flags ? flags.enabled : data && data.enabled),
+              disabled: busy || anyRunning || !(flags || data),
               onChange: (event) => toggle(event.target.checked),
-              children: "индексировать проект",
+              children: flags || data ? "индексировать проект" : "читаю параметры проекта…",
+            }),
+            jsx(Field, {
+              wide: true,
+              htmlFor: "p1c-rlm-path",
+              label: "Папка выгрузки",
+              hint: "Что индексировать. Пусто — папка проекта: " + path,
+              children: jsx("input", {
+                id: "p1c-rlm-path",
+                className: "p1c-input",
+                value: indexPathDraft,
+                placeholder: path,
+                disabled: busy || anyRunning,
+                onChange: (event) => setIndexPathDraft(event.target.value),
+                onBlur: () => saveIndexPath(),
+                onKeyDown: (event) => {
+                  if (event.key === "Enter") saveIndexPath();
+                },
+              }),
             }),
             running
               ? jsx(JobBox, {
@@ -655,17 +742,22 @@ window.__ModuleLoader__.load({
               : null,
             jsx("div", {
               className: "p1c-actions",
-              children: jsx(Btn, {
+              children: [jsx(Btn, {
                 variant: "primary",
                 disabled: !canRun,
                 title: data && !data.bin ? "средство индексации не установлено" : data && !data.enabled ? "сначала включите «индексировать проект»" : undefined,
                 onClick: () => run(action),
-                children: action === "build" ? "Собрать" : "Обновить",
-              }),
+                children: actionLabel,
+              }), structureStale ? jsx(Btn, {
+                disabled: !canRun,
+                title: "Только изменения, которые видит git: секунды. Состав файлов на диске обновление не сверяет.",
+                onClick: () => run("update"),
+                children: "Обновить",
+              }) : null],
             }),
             jsx("div", {
               className: "p1c-note",
-              children: "Полная сборка — несколько минут, обновление — секунды. Пересборка нужна только при смене схемы индекса.",
+              children: "Полная сборка — несколько минут, обновление — секунды. Пересборка нужна при смене схемы индекса и когда проверка видит на диске не тот набор файлов.",
             }),
           ],
         }),
@@ -915,6 +1007,7 @@ window.__ModuleLoader__.load({
       const [baseSaved, setBaseSaved] = useState(false);
       const [mcp, setMcp] = useState(null);
       const [indexRlm, setIndexRlm] = useState(false);
+      const [indexPath, setIndexPath] = useState("");
       const [pathCheck, setPathCheck] = useState(null);
       const [connection, setConnection] = useState(null);
       const [checking, setChecking] = useState(false);
@@ -1017,7 +1110,7 @@ window.__ModuleLoader__.load({
         try {
           await request("/project-index", {
             method: "POST",
-            body: JSON.stringify({ path: target.path, enabled: indexRlm }),
+            body: JSON.stringify({ path: target.path, enabled: indexRlm, indexPath: indexPath.trim() }),
           });
           await rlmRequest("/index/config", {
             method: "POST",
@@ -1505,10 +1598,28 @@ window.__ModuleLoader__.load({
       // исходники уже в проекте, и это отдельная работа, а не строка сводки.
       const rlmCard = jsx(Card, {
         title: "Синтаксическая индексация",
-        children: jsx(Check, {
-          checked: indexRlm,
-          onChange: (event) => setIndexRlm(event.target.checked),
-          children: "индексировать проект",
+        children: jsxs("div", {
+          className: "p1c-stack",
+          children: [
+            jsx(Check, {
+              checked: indexRlm,
+              onChange: (event) => setIndexRlm(event.target.checked),
+              children: "индексировать проект",
+            }),
+            jsx(Field, {
+              wide: true,
+              htmlFor: "p1c-wizard-rlm-path",
+              label: "Папка выгрузки",
+              hint: "Что индексировать. Пусто — папка проекта.",
+              children: jsx("input", {
+                id: "p1c-wizard-rlm-path",
+                className: "p1c-input",
+                value: indexPath,
+                placeholder: target.path,
+                onChange: (event) => setIndexPath(event.target.value),
+              }),
+            }),
+          ],
         }),
       });
 
