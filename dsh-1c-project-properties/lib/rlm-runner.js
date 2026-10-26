@@ -576,6 +576,8 @@ function createRuntime(ctx, config) {
       infoCache: new Map(),
       infoPending: new Map(),
       wanted: new Set(),
+      // Проекты, где автосборка остановлена до перезапуска: отказ не лечится повтором.
+      autoStopped: new Map(),
       autoTimer: null,
     },
   };
@@ -888,6 +890,26 @@ const INDEX_LOG = join(DIR, "logs", "index.log");
 
 /** Ответ CLI на неподдерживаемый формат источника: интерактивный вопрос или совет про флаг. */
 const UNSUPPORTED_FORMAT = /allow-unsupported-format|unsupported format|\\[y\\/N\\]/i;
+
+// Отказ, который повтором не лечится: движок не увидел в дереве исходников, CLI не установлен или
+// путь недоступен. Карточка опрашивает состояние раз в секунду, и каждый опрос запускал новую
+// сборку — в журнале это выглядело как два десятка прогонов в минуту с одной и той же ошибкой.
+const PERMANENT_INDEX_FAILURE = /формат исходников|ни одного \.bsl|index not found|не найден|недоступн|не указан путь|не является папкой/i;
+
+/** Повторится ли отказ сам: повод у среды (таймаут, занятый файл) — да, у исходников — нет. */
+export function indexFailureIsPermanent(text) {
+  return PERMANENT_INDEX_FAILURE.test(String(text || ""));
+}
+
+/** Причина отказа словами движка: «завершился с кодом 1» человеку ничего не объясняет. */
+export function indexFailureReason(lines) {
+  const items = (Array.isArray(lines) ? lines : []).map((line) => String(line ?? "").trim()).filter(Boolean);
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const match = items[i].match(/^(?:error|ошибка|fatal)\s*[:：]\s*(.+)$/i);
+    if (match) return match[1].slice(0, 400);
+  }
+  return (items[items.length - 1] || "").slice(0, 400);
+}
 // Проверка свежести обходит всё дерево проекта: 4 с на боевой базе, дольше на медленном
 // диске. Этот таймаут никто не ждёт синхронно — карточка отвечает из кэша.
 const INDEX_INFO_TIMEOUT_MS = 60_000;
@@ -1181,6 +1203,8 @@ function startIndexJob(rt, path, action, options = {}) {
   }
   const cli = detectIndexCommand();
   if (!cli) throw Object.assign(new Error("rlm-bsl-index не найден: установите rlm-tools-bsl"), { statusCode: 400 });
+  // Ручной запуск — решение человека: автосборка снова имеет право работать.
+  if (options.auto !== true) rt.index.autoStopped.delete(target.toLowerCase());
   const job = {
     id: ++rt.index.jobSeq,
     path: target,
@@ -1273,7 +1297,8 @@ function startIndexJob(rt, path, action, options = {}) {
         launch(["--allow-unsupported-format"], true);
         return;
       }
-      finish("failed", code, "index завершился с кодом " + code);
+      const reason = indexFailureReason(job.lines.slice(-40));
+      finish("failed", code, reason || "index завершился с кодом " + code + ", причину движок не назвал");
     });
   };
   launch([], false);
@@ -1347,8 +1372,17 @@ function autoBuildIfWanted(rt, projectPath, info) {
     const job = startIndexJob(rt, projectPath, "build", { auto: true });
     job.promise
       .then(() => {
-        // Неудача не должна закрывать проект до перезапуска: следующий раз соберём снова.
-        if (job.state !== "done") indexAutoOpened.delete(key);
+        if (job.state === "done") return;
+        // Повторять автоматически можно только то, что может пройти само. Детерминированный отказ
+        // (дерево не распознано как cf/EDT, нет ни одного .bsl, нет CLI) от повтора не меняется, а
+        // опрос карточки раз в секунду превращал его в поток прогонов с той же ошибкой — проект
+        // остаётся закрытым до перезапуска, причина видна в карточке.
+        if (indexFailureIsPermanent(job.error)) {
+          rt.index.autoStopped.set(key, { at: Date.now(), reason: String(job.error || "") });
+          return;
+        }
+        // Остальное (таймаут, занятый файл, диск) имеет смысл повторить при следующем опросе.
+        indexAutoOpened.delete(key);
       })
       .catch((error) => {
         indexAutoOpened.delete(key);
@@ -1425,6 +1459,8 @@ async function indexState(rt, rawPath, options = {}) {
     enabled,
     autoStarted,
     checking,
+    // Автосборка остановлена до перезапуска: причина в project.lastError.
+    autoStopped: path ? (rt.index.autoStopped.get(path.toLowerCase())?.reason ?? null) : null,
     project: entry
       ? {
           lastIndexAt: entry.lastIndexAt ?? null,

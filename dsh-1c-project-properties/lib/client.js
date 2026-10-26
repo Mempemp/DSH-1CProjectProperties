@@ -667,6 +667,11 @@ window.__ModuleLoader__.load({
                   ],
                 })
               : null,
+            // Автосборка остановлена до перезапуска: повторять детерминированный отказ бессмысленно, а
+            // без этой строки человек ждёт, что «само поправится». Ручная кнопка снимает остановку.
+            project && project.autoStopped && !running
+              ? jsx("div", { className: "p1c-note p1c-note--warn", children: "Автосборка индекса остановлена до перезапуска: повторять этот отказ автоматически нечего. Исправьте путь в параметрах проекта или нажмите «Пересобрать»." })
+              : null,
             project && !project.lastError && !running && status === "missing" && project.lastAttemptAt
               ? jsxs("div", {
                   className: "p1c-note p1c-note--warn",
