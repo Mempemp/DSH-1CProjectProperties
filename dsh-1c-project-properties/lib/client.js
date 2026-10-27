@@ -449,6 +449,8 @@ window.__ModuleLoader__.load({
       stale_content: { text: "устарел: файлы изменились", tone: "warn" },
       stale_structure: { text: "устарел: структура изменилась", tone: "warn" },
       unknown: { text: "состояние неизвестно", tone: "" },
+      // Проверка не закончилась за отведённое время: индекс есть, состав файлов не сверяли.
+      unchecked: { text: "состав файлов не проверен", tone: "" },
       error: { text: "ошибка проверки", tone: "err" },
       unavailable: { text: "средство индексации не установлено", tone: "err" },
     };
@@ -653,8 +655,12 @@ window.__ModuleLoader__.load({
                   children: ["Индексируется папка выгрузки: ", jsx("span", { className: "p1c-mono", children: data.target.path })],
                 })
               : null,
+            // Сработавший таймаут проверки — не поломка: текст нейтральный, без красного.
             index && index.error && index.status !== "missing"
-              ? jsx("div", { className: "p1c-note p1c-note--err", children: index.error })
+              ? jsx("div", {
+                  className: status === "unchecked" ? "p1c-note" : "p1c-note p1c-note--err",
+                  children: index.error,
+                })
               : null,
             project && project.lastError && !running
               ? jsxs("div", {
@@ -2906,6 +2912,8 @@ window.__ModuleLoader__.load({
     function RlmSection() {
       const [state, setState] = useState(null);
       const [port, setPort] = useState("");
+      const [probeMin, setProbeMin] = useState("");
+      const [jobMin, setJobMin] = useState("");
       const [dirty, setDirty] = useState(false);
       const [status, setStatus] = useState(null);
       const [busy, setBusy] = useState(false);
@@ -2930,6 +2938,9 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!state || dirty) return;
         setPort(String(state.config.port || ""));
+        const timeouts = state.indexTimeouts || {};
+        setProbeMin(String(timeouts.probeMin || ""));
+        setJobMin(String(timeouts.jobMin || ""));
       }, [state, dirty]);
 
       const run = async (action, message) => {
@@ -2958,6 +2969,20 @@ window.__ModuleLoader__.load({
           if (result && result.needsRestart) setStatus({ kind: "ok", text: "Порт сохранён — нажмите «Перезапустить», затем обновите URL в MCP-менеджере." });
           return result;
         });
+
+      // Таймауты — про выносливость: на слабой машине и сетевом диске обход дерева и сборка
+      // идут в разы дольше, и жёсткий предел только мешает.
+      const saveTimeouts = () =>
+        run(async () => {
+          const result = await rlmRequest("/save", {
+            method: "POST",
+            body: JSON.stringify({
+              settings: { index: { probeTimeoutMin: Number(probeMin), jobTimeoutMin: Number(jobMin) } },
+            }),
+          });
+          setDirty(false);
+          return result;
+        }, "Таймауты сохранены");
 
       const copySnippet = () => {
         if (!state) return;
@@ -3012,6 +3037,34 @@ window.__ModuleLoader__.load({
             jsx("button", { type: "button", style: rlmStyles.primaryButton, disabled: busy || !dirty, onClick: savePort, children: "Сохранить" }),
           ]}),
           jsx("div", { style: rlmStyles.hint, children: "Порт попадает в URL сервера — после смены перезапустите сервер и обновите его в MCP-менеджере." }),
+        ]}),
+        jsxs("div", { style: rlmStyles.card, children: [
+          jsxs("div", { style: rlmStyles.row, children: [
+            jsx("span", { style: { fontSize: 13, fontWeight: 600 }, children: "Таймауты индексации" }),
+            jsx("div", { style: { flex: "1 1 auto" } }),
+            jsx("button", { type: "button", style: rlmStyles.primaryButton, disabled: busy || !dirty, onClick: saveTimeouts, children: "Сохранить" }),
+          ]}),
+          jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }, children: [
+            jsx("span", { style: rlmStyles.hint, children: "Проверка свежести, мин" }),
+            jsx("input", {
+              style: { ...rlmStyles.input, width: 90 },
+              value: probeMin,
+              onChange: (event) => {
+                setDirty(true);
+                setProbeMin(event.target.value);
+              },
+            }),
+            jsx("span", { style: rlmStyles.hint, children: "Сборка, мин" }),
+            jsx("input", {
+              style: { ...rlmStyles.input, width: 90 },
+              value: jobMin,
+              onChange: (event) => {
+                setDirty(true);
+                setJobMin(event.target.value);
+              },
+            }),
+          ]}),
+          jsx("div", { style: rlmStyles.hint, children: "Предел, после которого прогон останавливается. Проверка при этом не показывает ошибку: карточка говорит «состав файлов не проверен», сборка и обновление остаются доступны." }),
         ]}),
         jsxs("div", { style: rlmStyles.card, children: [
           jsxs("div", { style: rlmStyles.row, children: [

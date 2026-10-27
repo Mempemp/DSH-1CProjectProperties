@@ -278,6 +278,21 @@ console.log("карточка индекса: автообновление");
   console.log("  ok   fresh/missing: без автообновления, кнопки называют действие");
 }
 
+// 4b. Проверка не уложилась в таймаут: это не ошибка и не повод что-то запускать.
+{
+  const { tree, api } = await mountCard(
+    baseState("unchecked", {
+      index: { ok: false, status: "unchecked", error: "проверка свежести не закончилась за 15 мин: каталог большой или диск медленный." },
+    }),
+  );
+  assert.equal(api.jobs.length, 0, "при unchecked ничего не запускается само");
+  assert.equal(buttonByLabel(tree, "Обновить").props.children, "Обновить", "действие по умолчанию — дешёвое обновление");
+  const errNote = findAll(tree, (node) => node.type === "div" && String(node.props.className || "").includes("p1c-note--err"));
+  assert.equal(errNote.length, 0, "таймаут показывается нейтрально, без красного");
+  assert.match(noteText(tree), /не закончилась за 15 мин/);
+  console.log("  ok   unchecked: без автообновления, текст нейтральный");
+}
+
 console.log("карточка индекса: кнопки");
 
 // 5. «Пересобрать» запускает полную сборку, рядом остаётся дешёвое «Обновить».

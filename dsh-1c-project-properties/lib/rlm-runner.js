@@ -598,6 +598,8 @@ function snapshot(rt) {
   const snippet = JSON.stringify({ serverName: MCP_SERVER_NAME, transport: "streamable-http", url, enabled: true }, null, 2);
   return {
     ok: true,
+    // Действующие таймауты индексации — их показывает вкладка настроек рядом с полями ввода.
+    indexTimeouts: indexTimeouts(),
     server: {
       name: SERVER_NAME,
       url,
@@ -867,6 +869,18 @@ async function restartServer(rt) {
 }
 function saveSettings(rt, patch) {
   const next = { ...readRawSettings(), ...rt.settings };
+  // Раздел index сливается по ключам: иначе сохранение таймаутов стёрло бы карту проектов
+  // и политику автообновления.
+  if (patch?.index && typeof patch.index === "object" && !Array.isArray(patch.index)) {
+    const current = next.index && typeof next.index === "object" && !Array.isArray(next.index) ? next.index : {};
+    const merged = { ...current };
+    for (const key of ["probeTimeoutMin", "jobTimeoutMin", "autoOnStart", "weekly"]) {
+      if (patch.index[key] !== undefined) merged[key] = patch.index[key];
+    }
+    next.index = merged;
+    patch = { ...patch };
+    delete patch.index;
+  }
   if (patch?.port !== undefined) {
     const port = Number(patch.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("порт должен быть целым числом 1..65535");
@@ -910,12 +924,31 @@ export function indexFailureReason(lines) {
   }
   return (items[items.length - 1] || "").slice(0, 400);
 }
-// Проверка свежести обходит всё дерево проекта: 4 с на боевой базе, дольше на медленном
-// диске. Этот таймаут никто не ждёт синхронно — карточка отвечает из кэша.
-const INDEX_INFO_TIMEOUT_MS = 60_000;
+// Проверка свежести обходит всё дерево проекта: 4 с на боевой базе, минуты на слабой машине или
+// сетевом диске. Таймаут здесь — страховка от зависшего процесса, а не предел производительности:
+// он длинный, настраивается и не означает ошибку, если сработал.
+const INDEX_INFO_TIMEOUT_MIN = 15;
+const INDEX_INFO_TIMEOUT_MS = INDEX_INFO_TIMEOUT_MIN * 60_000;
+// Сборка большого дерева на слабой машине идёт часами — убивать её на часе нельзя.
+const INDEX_JOB_TIMEOUT_MIN = 240;
+const INDEX_JOB_TIMEOUT_MS = INDEX_JOB_TIMEOUT_MIN * 60_000;
 // Сколько ждём проверку там, где ответ нужен сразу: клик по галочке «индексировать».
 const INDEX_STATE_WAIT_MS = 8_000;
-const INDEX_JOB_TIMEOUT_MS = 60 * 60 * 1000;
+
+// Настройки времени из settings.json: мусор и отрицательные значения отбрасываем.
+function minutesSetting(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(Math.round(number), 24 * 60);
+}
+
+function indexTimeouts() {
+  const config = readIndexConfig();
+  return {
+    probeMin: minutesSetting(config.probeTimeoutMin, INDEX_INFO_TIMEOUT_MIN),
+    jobMin: minutesSetting(config.jobTimeoutMin, INDEX_JOB_TIMEOUT_MIN),
+  };
+}
 const INDEX_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const INDEX_INFO_TTL_MS = 15_000;
 
@@ -961,6 +994,8 @@ function readIndexConfig() {
     projects,
     autoOnStart: index.autoOnStart !== false,
     weekly: index.weekly !== false,
+    probeTimeoutMin: index.probeTimeoutMin,
+    jobTimeoutMin: index.jobTimeoutMin,
   };
 }
 
@@ -1066,7 +1101,7 @@ function normalizeIndexStatus(statusText) {
   return "unknown";
 }
 
-function runIndexInfo(cli, key, env) {
+function runIndexInfo(cli, key, env, timeoutMs = INDEX_INFO_TIMEOUT_MS) {
   return new Promise((resolvePromise) => {
     let stdout = "";
     let stderr = "";
@@ -1083,7 +1118,7 @@ function runIndexInfo(cli, key, env) {
       } catch {
         // уже завершился
       }
-    }, INDEX_INFO_TIMEOUT_MS);
+    }, Math.max(1_000, Number(timeoutMs) || INDEX_INFO_TIMEOUT_MS));
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
     });
@@ -1112,7 +1147,13 @@ async function indexInfo(rt, path, fresh = false) {
     rt.index.infoCache.set(cacheKey, { at: Date.now(), value });
     return value;
   }
-  const run = await runIndexInfo(cli, key, { ...process.env, ...effectiveConfig(rt).config.env });
+  const timeouts = indexTimeouts();
+  const run = await runIndexInfo(
+    cli,
+    key,
+    { ...process.env, ...effectiveConfig(rt).config.env },
+    timeouts.probeMin * 60_000,
+  );
   const text = run.text;
   const parsed = parseIndexInfo(text);
   let value;
@@ -1121,14 +1162,16 @@ async function indexInfo(rt, path, fresh = false) {
   } else if (/not found|не найден|missing|нет индекса/i.test(text)) {
     value = { ok: true, status: "missing", statusText: "missing", error: text.trim().split("\n").slice(-3).join(" ") };
   } else if (run.timedOut) {
-    // Проверка не уложилась в таймаут: это не «индекс сломан», а «дерево слишком большое или
-    // диск медленный». Молчаливое «код -1» человек прочитать не может.
+    // Проверка не уложилась в таймаут: это не «индекс сломан» и не повод показывать ошибку —
+    // на слабой машине или сетевом диске обход дерева просто дольше. Статус честно говорит,
+    // что состав файлов не сверяли, а сборка и обновление остаются доступны.
     value = {
       ok: false,
-      status: "unknown",
+      status: "unchecked",
       error:
-        "проверка не уложилась в " + Math.round(INDEX_INFO_TIMEOUT_MS / 1000) + " с: каталог большой или диск медленный. " +
-        "Сборку и обновление это не запрещает — их можно запустить кнопкой.",
+        "проверка свежести не закончилась за " +
+        Math.round(indexTimeouts().probeMin) +
+        " мин: каталог большой или диск медленный. Таймаут меняется в настройках плагина.",
     };
   } else if (!text.trim()) {
     value = { ok: false, status: "error", error: "средство индексации не ответило: запуск rlm-bsl-index не удался" };
@@ -1279,8 +1322,9 @@ function startIndexJob(rt, path, action, options = {}) {
     child.stderr?.on("data", collect);
     const timer = setTimeout(() => {
       killTree(job.pid);
-      finish("failed", null, "таймаут: " + Math.round(INDEX_JOB_TIMEOUT_MS / 60000) + " мин");
-    }, INDEX_JOB_TIMEOUT_MS);
+      const jobMin = indexTimeouts().jobMin;
+      finish("failed", null, "таймаут: сборка не уложилась в " + jobMin + " мин (меняется в настройках плагина)");
+    }, indexTimeouts().jobMin * 60_000);
     timer.unref?.();
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -1451,7 +1495,12 @@ async function indexState(rt, rawPath, options = {}) {
     root: indexRoot(rt),
     // Полный журнал прогонов; карточка показывает путь, чтобы ошибку можно было прочитать.
     logFile: INDEX_LOG,
-    policy: { autoOnStart: config.autoOnStart, weekly: config.weekly },
+    policy: {
+      autoOnStart: config.autoOnStart,
+      weekly: config.weekly,
+      probeTimeoutMin: indexTimeouts().probeMin,
+      jobTimeoutMin: indexTimeouts().jobMin,
+    },
     path,
     // Что индексируется: папка проекта или заданная в параметрах папка выгрузки.
     target: target ? { path: target, custom: indexPath !== "" } : null,

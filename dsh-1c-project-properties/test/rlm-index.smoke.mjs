@@ -125,6 +125,22 @@ try {
   const badJob = await request("/rlm/index/job", { path: join(project, "nope"), action: "build" });
   assert.equal(badJob.code, 400);
 
+  // Таймауты индексации: значения по умолчанию видны в состоянии, сохранение их меняет
+  // и не трогает карту проектов.
+  const defaults = await request("/rlm/state");
+  assert.equal(defaults.body.indexTimeouts.probeMin, 15, "таймаут проверки по умолчанию");
+  assert.equal(defaults.body.indexTimeouts.jobMin, 240, "таймаут сборки по умолчанию");
+  const savedTimeouts = await request("/rlm/save", {
+    settings: { index: { probeTimeoutMin: 40, jobTimeoutMin: 600 } },
+  });
+  assert.equal(savedTimeouts.body.indexTimeouts.probeMin, 40);
+  assert.equal(savedTimeouts.body.indexTimeouts.jobMin, 600);
+  const settingsAfterTimeouts = JSON.parse(readFileSync(join(home, "rlm-tools-bsl", "settings.json"), "utf8"));
+  assert.equal(settingsAfterTimeouts.index.projects[project].enabled, true, "карта проектов уцелела");
+  const stateAfterTimeouts = await request("/rlm/index/state?path=" + encodeURIComponent(project));
+  assert.equal(stateAfterTimeouts.body.policy.probeTimeoutMin, 40, "карточка видит действующий таймаут");
+  assert.equal(stateAfterTimeouts.body.policy.jobTimeoutMin, 600);
+
   // Сохранение порта не должно стирать раздел index.
   const saved = await request("/rlm/save", { settings: { port: 65202 } });
   assert.equal(saved.code, 200);
