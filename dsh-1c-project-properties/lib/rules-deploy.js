@@ -660,6 +660,12 @@ export function deployRules(options) {
     }
   }
 
+  // Дерево comol могло остаться с прошлого развёртывания: файлы не удаляем, но в AGENTS.md
+  // его карта больше не входит — без пометки это выглядит как потеря правил.
+  if (!withComol && isDirectory(join(projectPath, RULES_DIR_REL))) {
+    journal.note("дерево comol в проекте осталось без изменений; в AGENTS.md его карта не включена");
+  }
+
   // Наши плейбуки и справка по окружению.
   if (isDirectory(PLAYBOOK_DIR)) {
     for (const rel of listFiles(PLAYBOOK_DIR)) {

@@ -2400,6 +2400,7 @@ window.__ModuleLoader__.load({
                     jsx("div", { key: index, className: "p1c-mono", children: file.path + (file.detail ? " — " + file.detail : "") }),
                   ),
                   preserved.length > 3 ? jsx("div", { children: "и ещё " + (preserved.length - 3) }) : null,
+                  jsx("div", { children: "Изменённые файлы не обновляются: удалите файл и разверните снова — придёт новая версия." }),
                 ],
               })
             : null,
