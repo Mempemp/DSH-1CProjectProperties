@@ -743,9 +743,10 @@ window.__ModuleLoader__.load({
                   jsx("span", {
                     className: "p1c-row__value p1c-sm",
                     children: engineReady
-                      ? "установлен" + (engine.sizeMb ? " · " + engine.sizeMb + " МБ" : "")
+                      ? (engine.shipped ? "входит в сборку" : "установлен") +
+                        (engine.sizeMb ? " · " + engine.sizeMb + " МБ" : "")
                       : engine.supported
-                        ? "не скачан"
+                        ? "не найден"
                         : "для этой платформы сборка не закреплена",
                   }),
                 ],
@@ -758,11 +759,13 @@ window.__ModuleLoader__.load({
                     variant: engineReady ? undefined : "primary",
                     disabled: busy || !engine.supported,
                     onClick: download,
-                    children: engineReady ? "Проверить установку" : "Скачать bsl-analyzer",
+                    children: engineReady ? "Проверить установку" : engine.canDownload ? "Скачать bsl-analyzer" : "Движок не найден",
                   }),
                   jsx("span", {
                     className: "p1c-note",
-                    children: "Один раз, около 76 МБ. Дальше проверки идут без интернета.",
+                    children: engine.shipped
+                      ? "Движок лежит в установленном приложении: скачивать ничего не нужно, проверки идут без интернета."
+                      : "Один раз, около 76 МБ. Дальше проверки идут без интернета.",
                   }),
                 ],
               }),

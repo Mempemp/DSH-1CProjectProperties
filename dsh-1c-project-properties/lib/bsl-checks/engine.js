@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export const ENGINE_VERSION = "0.4.3";
 
@@ -24,6 +24,36 @@ const ASSETS = {
   "darwin-arm64": { name: "bsl-analyzer-app-darwin-arm64", binary: "bsl-analyzer-app", sha256: "", size: 0 },
   "linux-x64": { name: "bsl-analyzer-app-linux-amd64", binary: "bsl-analyzer-app", sha256: "", size: 0 },
 };
+
+// Раскатка установщика кладёт закреплённый бинарник в $DSH_HOME/bsl-analyzer — это
+// первый источник после явного пути в настройках: ничего скачивать не нужно.
+function shippedRoot() {
+  const env = process.env.DSH_HOME;
+  const home = env && env.trim() ? resolve(env.trim()) : join(homedir(), ".dsh");
+  return join(home, "bsl-analyzer");
+}
+
+// Проверка байтов кешируется по mtime и размеру: sha256 на 79 МБ не должен
+// считаться при каждом опросе состояния.
+const verifiedAssets = new Map();
+
+function verifyAsset(file, asset) {
+  const stat = statSync(file);
+  const memo = verifiedAssets.get(file);
+  if (memo && memo.mtimeMs === stat.mtimeMs && memo.size === stat.size) return true;
+  if (asset.size && stat.size !== asset.size) return false;
+  if (asset.sha256 && sha256File(file) !== asset.sha256) return false;
+  verifiedAssets.set(file, { mtimeMs: stat.mtimeMs, size: stat.size });
+  return true;
+}
+
+function sizeOf(file) {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
 
 function cacheRoot() {
   const env = process.env.DSH_BSL_CHECKER_DIR;
@@ -49,16 +79,18 @@ export function resolveBinary() {
   if (explicit && explicit.trim() && existsSync(explicit.trim())) return explicit.trim();
   const asset = assetFor();
   if (!asset) return "";
+  const shipped = join(shippedRoot(), asset.name);
+  if (existsSync(shipped)) {
+    try {
+      if (verifyAsset(shipped, asset)) return shipped;
+    } catch {}
+  }
   const file = join(cacheRoot(), asset.binary);
   if (!existsSync(file)) return "";
-  if (asset.sha256) {
-    try {
-      const size = statSync(file).size;
-      if (asset.size && size !== asset.size) return "";
-      if (sha256File(file) !== asset.sha256) return "";
-    } catch {
-      return "";
-    }
+  try {
+    if (!verifyAsset(file, asset)) return "";
+  } catch {
+    return "";
   }
   return file;
 }
@@ -70,13 +102,20 @@ function sha256File(file) {
 export function engineStatus() {
   const asset = assetFor();
   const bin = resolveBinary();
+  const shipped = asset ? join(shippedRoot(), asset.name) : "";
+  const cached = asset ? join(cacheRoot(), asset.binary) : "";
   return {
     version: ENGINE_VERSION,
     target: engineTarget(),
     supported: Boolean(asset),
     downloaded: Boolean(bin),
+    // Движок приехал вместе со сборкой, а не скачан кнопкой.
+    shipped: Boolean(bin) && shipped !== "" && bin === shipped,
     binary: bin,
     cacheDir: cacheRoot(),
+    shippedDir: shippedRoot(),
+    sizeMb: bin ? Math.round(sizeOf(bin) / (1024 * 1024)) : 0,
+    cached: Boolean(bin) && cached !== "" && bin === cached,
     canDownload: Boolean(asset && asset.sha256),
   };
 }
