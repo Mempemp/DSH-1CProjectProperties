@@ -151,8 +151,11 @@ if (!platform) {
   check("индекс собран после смены пути", ready.status?.indexLoaded === true, ready.status?.error);
   check("сервер отдан MCP-менеджеру", ready.status?.managerRegistered === true);
   check("адрес — streamable-http на loopback", /^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(ready.status?.url || ""), ready.status?.url);
-  const registered = managerCalls.find((call) => call.method === "registerServer");
-  check("менеджер получил имя и транспорт", registered?.server?.name === "1c-platform-context" && registered?.server?.transport === "streamable-http", JSON.stringify(registered));
+  // В плагине теперь два MCP-сервера; ищем свой по имени, а не по порядку вызовов.
+  const registered = managerCalls.find(
+    (call) => call.method === "registerServer" && call.server?.name === "1c-platform-context",
+  );
+  check("менеджер получил имя и транспорт", registered?.server?.transport === "streamable-http", JSON.stringify(registered));
   check("конфиг сервера лежит в $DSH_HOME", String(ready.status?.configFile || "").startsWith(process.env.DSH_HOME), ready.status?.configFile);
 
   const stateRoute = await callRoute("/1cprops/state");

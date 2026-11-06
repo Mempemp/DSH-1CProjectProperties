@@ -48,6 +48,10 @@ const configuredDir = join(work, "projects", "configured");
 write(join(configuredDir, ".dsh", "1c-project.json"), JSON.stringify({ infobasePath: 'Srvr="s";Ref="b";', user: "Админ" }));
 write(join(configuredDir, "Configuration.xml"), "<Config/>");
 mkdirSync(join(configuredDir, ".dsh", "rules-1c"), { recursive: true });
+write(
+  join(configuredDir, ".dsh", "1c-rules.json"),
+  JSON.stringify({ format: "dsh-1c-rules-deploy", formatVersion: 3, withComol: false, files: [] }),
+);
 
 // ── хост-половина ───────────────────────────────────────────────────────────
 const routes = new Map();
@@ -291,6 +295,7 @@ const deps = {
   Btn: stub("Btn"),
   Dot: stub("Dot"),
   JobBox: stub("JobBox"),
+  ChecksCard: stub("ChecksCard"),
   CloseIcon: stub("CloseIcon"),
   Summary: stub("Summary"),
   EMPTY_FORM: { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" },
@@ -302,7 +307,7 @@ const deps = {
 
 const factory = new Function(
   "deps",
-  "const { useState, useEffect, useCallback, jsx, jsxs, portal, cx, request, injectStyles, Card, Field, Check, Btn, Dot, JobBox, CloseIcon, Summary, EMPTY_FORM, EMPTY_RUN, EMPTY_RULES_OPTIONS, RESULT_LABEL, RULES_REPO } = deps;\n" +
+  "const { useState, useEffect, useCallback, jsx, jsxs, portal, cx, request, injectStyles, Card, Field, Check, Btn, Dot, JobBox, ChecksCard, CloseIcon, Summary, EMPTY_FORM, EMPTY_RUN, EMPTY_RULES_OPTIONS, RESULT_LABEL, RULES_REPO } = deps;\n" +
     "const WIZARD_STEPS_LOCAL = 0;\n" +
     block +
     "\nreturn { installCreateHook, Wizard, WizardHost, openWizard, closeWizard, snapshot: () => wizardRequest, notifyWizard };",

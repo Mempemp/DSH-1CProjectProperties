@@ -16,8 +16,15 @@ import {
   deployRules,
   readPayload,
   removeRules,
+  rulesSummary,
 } from "./rules-deploy.js";
+import { COMOL } from "./rulesets.js";
 import { applyRlm } from "./rlm-runner.js";
+import { registerBslChecksRoutes } from "./bsl-checks/router.js";
+import { MCP_SERVER_NAME, startChecksMcpServer } from "./bsl-checks/mcp.js";
+import { engineStatus } from "./bsl-checks/engine.js";
+import { callNaparnik, naparnikRuntime, startNaparnik, stopNaparnik } from "./naparnik.js";
+import { fetchBudget } from "./naparnik-public.js";
 import {
   PLATFORM_CONTEXT_SERVER,
   platformContextExe,
@@ -39,7 +46,16 @@ const PARAMS_FILE = "1c-project.json";
 const PARAMS_REL = PARAMS_DIR + "/" + PARAMS_FILE;
 
 // Порядок ключей в файле проекта (и полный список поддерживаемых полей).
-const PARAM_KEYS = ["infobasePath", "user", "password", "platformPath", "unlockCode", "dumpDir"];
+const PARAM_KEYS = [
+  "infobasePath",
+  "user",
+  "password",
+  "platformPath",
+  "unlockCode",
+  "dumpDir",
+  "checksEnabled",
+  "checksPreset",
+];
 
 // $DSH_HOME: та же приоритетность, что у ядра — переменная окружения, иначе ~/.dsh.
 const DSH_HOME = (() => {
@@ -121,6 +137,7 @@ function readCommon() {
   const raw = readJson(COMMON_FILE) ?? {};
   return {
     platformPath: typeof raw.platformPath === "string" ? raw.platformPath : "",
+    naparnikToken: typeof raw.naparnikToken === "string" ? raw.naparnikToken.trim() : "",
     extraProjects: Array.isArray(raw.extraProjects)
       ? raw.extraProjects.filter((p) => typeof p === "string" && p.trim()).map((p) => canonical(p))
       : [],
@@ -903,12 +920,16 @@ function listProjects(ctx, common) {
 function describeProject(entry, common) {
   const info = readParams(entry.path);
   const platformPath = info.params.platformPath;
+  const exists = isDirectory(entry.path);
   return {
     ...entry,
-    exists: isDirectory(entry.path),
+    exists,
     hasFile: info.hasFile,
     filePath: info.file,
     params: info.params,
+    // Короткая сводка набора правил: карточке нужны только набор и кнопка.
+    // Полный список файлов она спрашивает отдельно — он читает сотни файлов.
+    rules: exists ? rulesSummary(entry.path) : { deployed: false },
     effectivePlatformPath: platformPath || common.platformPath,
     platformFromCommon: platformPath === "",
   };
@@ -921,14 +942,26 @@ function describeProject(entry, common) {
  * развёрнутого набора, ни дрейфа правок в проекте он не считает: карточка правил
  * только блокирует кнопку и объясняет, чего не хватает.
  */
-function describePayload() {
-  const payload = readPayload(DSH_HOME);
+function payloadInfo(payload) {
   return {
-    ok: payload.ok,
-    root: payload.root,
-    error: payload.ok ? undefined : payload.error,
-    version: payload.ok ? payload.manifest?.version ?? "" : "",
-    derived: payload.ok ? payload.derived === true : false,
+    ok: payload?.ok === true,
+    root: payload?.root ?? "",
+    error: payload?.ok ? undefined : payload?.error,
+    version: payload?.ok ? payload?.manifest?.version ?? "" : "",
+    derived: payload?.ok ? payload?.derived === true : false,
+  };
+}
+
+/**
+ * Наличие payload'а comol в DSH и его подписи. Наши правила от payload'а не
+ * зависят: флажок только добавляет дерево comol к нашей раскладке.
+ */
+function describePayloads() {
+  return {
+    comol: payloadInfo(readPayload(DSH_HOME)),
+    title: COMOL.title,
+    hint: COMOL.hint,
+    repo: COMOL.repo,
   };
 }
 
@@ -965,6 +998,7 @@ function hasBslSources(dir, depth, budget) {
 
 function detectProject(projectPath) {
   const info = readParams(projectPath);
+  const rules = rulesSummary(projectPath);
   const markers = [];
   if (existsSync(join(projectPath, "Configuration.xml"))) markers.push("выгрузка конфигурации в файлы");
   if (existsSync(join(projectPath, "ConfigDumpInfo.xml"))) markers.push("файл версий выгрузки");
@@ -977,9 +1011,11 @@ function detectProject(projectPath) {
     is1c: markers.length > 0 || info.hasFile,
     markers,
     hasParams: info.hasFile,
-    hasRules: existsSync(join(projectPath, PARAMS_DIR, "rules-1c")),
+    // Правила считаются развёрнутыми, если в проекте есть наш манифест.
+    hasRules: rules.deployed,
     hasDump: existsSync(join(projectPath, "Configuration.xml")),
     params: info.params,
+    rules,
   };
 }
 
@@ -1303,17 +1339,282 @@ function describePlatformContext() {
 // Причина, по которой движок не поднялся: отдаётся карточке, чтобы отказ был назван, а не гадался.
 let engineError = null;
 
+// Инструменты проверки для агента: свой MCP-сервер на localhost. Его
+// поверхность — три действия, а не весь профиль движка. Сервер поднимается
+// вместе с плагином; при выключенных проверках инструменты отвечают отказом.
+const bslChecksBridge = { server: null, registered: false, starting: null };
+
+function ensureBslChecksMcp() {
+  if (bslChecksBridge.server) return Promise.resolve(bslChecksBridge.server);
+  if (bslChecksBridge.starting) return bslChecksBridge.starting;
+  bslChecksBridge.starting = (async () => {
+    const server = await startChecksMcpServer({
+      projects: () => {
+        try {
+          return listProjects(ctx, readCommon()).map((item) => ({ path: item.path, name: item.title }));
+        } catch {
+          return [];
+        }
+      },
+      naparnikToken: () => readCommon().naparnikToken,
+    });
+    bslChecksBridge.server = server;
+    bslChecksBridge.starting = null;
+    const service = managerService();
+    if (service) {
+      await service
+        .registerServer({
+          name: MCP_SERVER_NAME,
+          transport: "streamable-http",
+          url: server.url,
+          // Второе мнение Напарника отвечает десятки секунд: менеджерский
+          // потолок 15 с его обрезал бы, поэтому просим больше на весь сервер.
+          toolCallTimeoutMs: 240_000,
+          description:
+            "Проверки кода BSL: проверка фрагмента до записи, проверка файлов и принятие замечаний, " +
+            "второе мнение 1С:Напарника по модулю.",
+        })
+        .catch(() => {});
+      bslChecksBridge.registered = true;
+    }
+    return server;
+  })().catch((error) => {
+    bslChecksBridge.starting = null;
+    throw error;
+  });
+  return bslChecksBridge.starting;
+}
+
+async function stopBslChecksMcp() {
+  const service = managerService();
+  if (service && bslChecksBridge.registered) {
+    bslChecksBridge.registered = false;
+    await service.unregisterServer(MCP_SERVER_NAME).catch(() => {});
+  }
+  const server = bslChecksBridge.server;
+  bslChecksBridge.server = null;
+  if (server) await server.close().catch(() => {});
+}
+
+// ── 1С:Напарник (MCP) ───────────────────────────────────────────────────────
+//
+// Ответы по стандартам ИТС отдаёт сам движок проверок: у bsl-analyzer есть
+// профиль reference с инструментом its_help. Проксировать его незачем — плагин
+// регистрирует движок в MCP-менеджере как обычный stdio-сервер на всё
+// приложение (не на проект), с токеном из общих настроек.
+//
+// Регистрация живёт, пока живёт приложение: при старте плагин ставит её заново.
+// Нет токена или движка — сервер снимается с учёта, и агент видит его
+// отсутствие, а не отказ на вызове.
+
+const NAPARNIK_SERVER = "1c-naparnik";
+
+// Официальный stdio-транспорт получает ровно этот env, без наследования
+// окружения: переменные оболочки нужны бинарнику, токен — ему же.
+const NAPARNIK_PASSTHROUGH_ENV = ["SYSTEMROOT", "PATH", "TEMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA"];
+
+const naparnikBridge = { registered: false, token: "", binary: "", error: "" };
+
+// Единственный инструмент, который видит агент. Движок отдаёт ещё search и
+// syntax_help — они дублируют 1c-platform-context и v8std, поэтому наружу не идут.
+const NAPARNIK_TOOL = {
+  name: "its_help",
+  description:
+    "Ответ по стандартам разработки 1С (ИТС), БСП и методическим материалам: «как принято», " +
+    "почему правило такое, какой из похожих методов выбрать. Вопрос — один и узкий, контекст " +
+    "(платформа, конфигурация, БСП, сервер или клиент) вписывается в текст: проект инструмент " +
+    "не видит. Сигнатуры и типы — платформенная справка, поиск по коду — rlm.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      question: {
+        type: "string",
+        description: "Вопрос словами: что нужно решить и в каком контексте.",
+      },
+      max_output_tokens: {
+        type: ["integer", "null"],
+        minimum: 0,
+        description: "Бюджет ответа в токенах; по умолчанию 6000, длинный ответ усекается с пометкой.",
+      },
+    },
+    required: ["question"],
+  },
+  execute: async (args) => {
+    const question = String(args?.question ?? "").trim();
+    if (!question) throw new Error("its_help: question обязателен");
+    const budget = Number.isFinite(args?.max_output_tokens)
+      ? Math.max(0, Math.floor(args.max_output_tokens))
+      : 6000;
+    try {
+      const text = await callNaparnik("its_help", { question, max_output_tokens: budget });
+      return { text };
+    } catch (error) {
+      // Ошибка движка про .mcp.json человеку и агенту ничего не говорит:
+      // в плагине токен лежит в настройках, туда и отправляем.
+      if (/NAPARNIK_TOKEN/i.test(String(error?.message || error))) {
+        throw new Error(
+          "its_help: сервис не принял токен. Проверьте его в настройках плагина: «1С: Анализ кода» → «1С:Напарник».",
+        );
+      }
+      throw error;
+    }
+  },
+  output: {
+    render: (_args, value) => [{ type: "text", text: String(value?.text ?? "") }],
+  },
+};
+
+function naparnikStatus() {
+  const token = readCommon().naparnikToken;
+  const engine = engineStatus();
+  let error = naparnikBridge.error;
+  if (!token) error = "токен не задан";
+  else if (!engine.binary) error = "движок bsl-analyzer не скачан";
+  return {
+    ok: true,
+    server: NAPARNIK_SERVER,
+    tokenSet: Boolean(token),
+    tokenTail: token ? token.slice(-4) : "",
+    tokenFile: COMMON_FILE,
+    engine: {
+      downloaded: Boolean(engine.binary),
+      version: engine.version,
+      binary: engine.binary,
+    },
+    managerAvailable: Boolean(managerService()),
+    registered: naparnikBridge.registered,
+    runtime: naparnikRuntime(),
+    error,
+  };
+}
+
+async function withdrawNaparnik() {
+  const service = managerService();
+  const wasRegistered = naparnikBridge.registered;
+  naparnikBridge.registered = false;
+  if (service && wasRegistered) {
+    await service.unregisterServer(NAPARNIK_SERVER).catch(() => {});
+  }
+  // Процесс держим только под живую регистрацию: без неё вызовов не будет.
+  stopNaparnik();
+}
+
+/**
+ * Привести регистрацию сервера в соответствие с настройками.
+ * Повторный вызов без изменений — no-op; сменился токен или движок — переподключение.
+ */
+async function publishNaparnik({ restart = false } = {}) {
+  const service = managerService();
+  const token = readCommon().naparnikToken;
+  const binary = engineStatus().binary;
+  naparnikBridge.error = "";
+
+  if (!service || !token || !binary) {
+    await withdrawNaparnik();
+    naparnikBridge.token = "";
+    naparnikBridge.binary = "";
+    if (!token) naparnikBridge.error = "токен не задан";
+    else if (!binary) naparnikBridge.error = "движок bsl-analyzer не скачан";
+    else naparnikBridge.error = "менеджер MCP недоступен";
+    return naparnikStatus();
+  }
+
+  if (
+    !restart &&
+    naparnikBridge.registered &&
+    naparnikBridge.token === token &&
+    naparnikBridge.binary === binary
+  ) {
+    return naparnikStatus();
+  }
+
+  if (naparnikBridge.registered) {
+    await withdrawNaparnik();
+  }
+
+  const env = { NAPARNIK_TOKEN: token };
+  for (const key of NAPARNIK_PASSTHROUGH_ENV) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+
+  // Обёртка со своим списком инструментов: менеджер не поднимает транспорт сам,
+  // вызов идёт через наш клиент (lib/naparnik.js), поэтому процесс запускаем здесь.
+  const command = String(process.env.DSH_NAPARMIK_COMMAND || "").trim() || binary;
+  let args = ["mcp", "serve", "--profile", "reference"];
+  if (process.env.DSH_NAPARMIK_ARGS) {
+    try {
+      const parsed = JSON.parse(process.env.DSH_NAPARMIK_ARGS);
+      if (Array.isArray(parsed)) args = parsed.map(String);
+    } catch {
+      naparnikBridge.error = "DSH_NAPARMIK_ARGS не разобран как JSON-массив";
+      return naparnikStatus();
+    }
+  }
+  const started = await startNaparnik({ command, args, env });
+  if (!started.ok) {
+    naparnikBridge.error = "процесс не запустился: " + (started.error || "причина неизвестна");
+    return naparnikStatus();
+  }
+
+  try {
+    const result = await service.registerServer({
+      name: NAPARNIK_SERVER,
+      transport: "stdio",
+      command,
+      args,
+      env,
+      // its_help отвечает до двух минут; менеджер по умолчанию режет вызов на 15 с.
+      toolCallTimeoutMs: 180_000,
+      toolDefinitions: [NAPARNIK_TOOL],
+      description:
+        "1С:Напарник: ответы по стандартам разработки ИТС, БСП и методическим материалам. " +
+        "Один инструмент its_help; справку по API платформы и поиск по документации дают " +
+        "1c-platform-context и v8std.",
+    });
+    if (result && result.existing) {
+      // Сервер с этим именем уже добавлен в менеджер вручную: чужую запись не трогаем.
+      naparnikBridge.registered = false;
+      naparnikBridge.error =
+        "в MCP-менеджере уже есть сервер «" + NAPARNIK_SERVER + "», добавленный вручную: регистрация плагина пропущена";
+      return naparnikStatus();
+    }
+    naparnikBridge.registered = true;
+    naparnikBridge.token = token;
+    naparnikBridge.binary = binary;
+  } catch (error) {
+    naparnikBridge.registered = false;
+    naparnikBridge.error = error?.message || String(error);
+  }
+  return naparnikStatus();
+}
+
 export function apply(ctx) {
+  // Проверки кода: свои роуты рядом с параметрами проекта. Движок поднимается
+  // по первому запросу, отдельного состояния при старте нет.
+  registerBslChecksRoutes(ctx, {
+    // Роутам проверок нужен список проектов: скачивание движка и вкладка
+    // настроек не привязаны к одному проекту.
+    listProjects: () => listProjects(ctx, readCommon()),
+    // Движок скачали — у Напарника появился бинарник, и регистрация может стать возможной.
+    onEngineReady: () => publishNaparnik().catch(() => {}),
+  });
 
   // Сервер справки поднимается сразу: путь к платформе может быть ещё не задан,
   // и это штатное состояние первой установки, а не ошибка.
   ctx.inject(["mcpManager"], (mctx) => {
     managerBridge.service = mctx.get("mcpManager") ?? null;
     ensurePlatformContext().catch(() => {});
+    ensureBslChecksMcp().catch(() => {});
+    // Напарник регистрируется при старте: токен и движок уже могут быть на месте.
+    publishNaparnik().catch(() => {});
     mctx.on("dispose", () => {
       // Снимаем сервер с учёта, пока держим сервис: у приложения на выходе
       // порядок dispose у нашего и менеджерского плагина не гарантирован.
       Promise.resolve(withdrawPlatformContext()).catch(() => {});
+      Promise.resolve(stopBslChecksMcp()).catch(() => {});
+      Promise.resolve(withdrawNaparnik()).catch(() => {});
       managerBridge.service = null;
     });
   });
@@ -1344,6 +1645,53 @@ export function apply(ctx) {
     },
   });
 
+  // 1С:Напарник: чтение состояния и сохранение токена. Токен — в общих
+  // настройках (settings.json), не в проекте: он один на машину.
+  // Остаток квоты ключа. Отдельный роут: это сетевой вызов к сервису, а статус
+  // карточки читается часто и обязан отвечать из памяти.
+  // Отказ сервиса приходит внутри budget — так UI показывает причину, а не
+  // исключение: «бюджет исчерпан» и «ключ не принят» разные истории.
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/bsl-checks/naparnik-budget",
+    handler: async (_req, res) => {
+      try {
+        const token = readCommon().naparnikToken;
+        if (!token) {
+          return json(res, 200, {
+            ok: true,
+            budget: { ok: false, code: "naparnik_token_missing", error: "токен не задан", hint: "Вставьте ключ в поле «Токен»." },
+          });
+        }
+        json(res, 200, { ok: true, budget: await fetchBudget(token) });
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
+  ctx.webServer.register({
+    kind: "exact",
+    path: ROUTE + "/bsl-checks/naparnik",
+    handler: async (req, res) => {
+      try {
+        if ((req.method || "GET").toUpperCase() === "POST") {
+          const body = JSON.parse((await readBody(req)) || "{}");
+          if (typeof body?.token === "string") {
+            const common = readCommon();
+            common.naparnikToken = body.token.trim();
+            writeCommon(common);
+          }
+          const status = await publishNaparnik({ restart: true });
+          return json(res, 200, { ...status, ok: true });
+        }
+        json(res, 200, naparnikStatus());
+      } catch (error) {
+        json(res, 500, { ok: false, error: error?.message || String(error) });
+      }
+    },
+  });
+
   ctx.webServer.register({
     kind: "exact",
     path: ROUTE + "/state",
@@ -1351,6 +1699,7 @@ export function apply(ctx) {
       try {
         const common = readCommon();
         const infobases = listInfoBases();
+        const rulesPayloads = describePayloads();
         json(res, 200, {
           ok: true,
           // Движок поднимается последним и под try: сломанный движок не должен отменять
@@ -1364,7 +1713,10 @@ export function apply(ctx) {
           infobases: infobases.items,
           infobasesWebSkipped: infobases.webSkipped,
           infobasesSources: infobases.sources,
-          rulesPayload: describePayload(),
+          // Прежнее имя (comol) остаётся: клиент может быть старее и других
+          // наборов не знает. rulesPayloads — полный список для нового клиента.
+          rulesPayload: rulesPayloads.comol,
+          rulesPayloads,
           platformContext: describePlatformContext(),
         });
       } catch (error) {
@@ -1615,13 +1967,11 @@ export function apply(ctx) {
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-status", handler: dumpStatus });
   ctx.webServer.register({ kind: "exact", path: ROUTE + "/dump-cancel", handler: cancelDump });
 
-  // ── правила 1С в проекте (1c-rules) ──────────────────────────────────────
+  // ── правила 1С в проекте ─────────────────────────────────────────────────
   //
-  // Набор правил кладёт десктоп в $DSH_HOME/1c-rules; здесь он раскладывается
-  // в проекте в ту структуру, которую читает DSH: <проект>/.dsh/skills для
-  // навыков и <проект>/AGENTS.md как всегда включённый контекст. Ссылки правил
-  // на content/... при этом переписываются на проектные пути — без этого они
-  // указывают в никуда. Подробности контракта — lib/rules-deploy.js.
+  // Наш слой (AGENTS.md, плейбуки, USER-RULES.md, environment.md) разворачивается
+  // всегда; comol — только если клиент прислал withComol. Ничего не удаляется:
+  // снятый флажок означает «больше не разворачивать». Подробности — lib/rules-deploy.js.
 
   ctx.webServer.register({
     kind: "exact",
@@ -1633,15 +1983,16 @@ export function apply(ctx) {
         if (!isDirectory(projectPath)) {
           return json(res, 400, { ok: false, error: "папка не найдена: " + projectPath });
         }
+        const dryRun = body?.dryRun === true;
         const result = deployRules({
           dshHome: DSH_HOME,
           projectPath,
-          sections: Array.isArray(body?.sections) && body.sections.length > 0 ? body.sections : undefined,
+          withComol: body?.withComol === true,
           params: readParams(projectPath).params,
           common: readCommon(),
           includePassword: body?.includePassword === true,
           useEdt: body?.useEdt === true,
-          dryRun: body?.dryRun === true,
+          dryRun,
           force: body?.force === true,
         });
         json(res, result.ok ? 200 : 400, result);

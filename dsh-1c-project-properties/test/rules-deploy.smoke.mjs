@@ -1,36 +1,26 @@
-// Проверка контракта развёртывания правил в проект.
-//
-// Запуск: node test/rules-deploy.smoke.mjs
-//
-// Тест самодостаточный: собирает синтетический набор правил (той же формы, что
-// сеет DSH Desktop в $DSH_HOME/1c-rules), разворачивает его в поддельный проект
-// и проверяет то, что легко сломать незаметно: переписывание ссылок,
-// сохранение чужого AGENTS.md, идемпотентность повторного прогона, сохранение
-// правок пользователя и корректное удаление.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Правила 1С в проекте: наш слой разворачивается всегда, comol — флажком.
+// Снятый флажок ничего не удаляет; удаление — только явная команда removeRules.
+
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const moduleUrl = pathToFileURL(resolve(here, "..", "lib", "rules-deploy.js")).href;
-const { deployRules, removeRules, rulesStatus, rewritePaths, readPayload } = await import(moduleUrl);
-const { buildDesignerArgs } = await import(pathToFileURL(resolve(here, "..", "lib", "index.js")).href);
+const {
+  deployRules,
+  readPayload,
+  removeRules,
+  rewritePaths,
+  rulesStatus,
+  rulesSummary,
+} = await import("../lib/rules-deploy.js");
+const { COMOL } = await import("../lib/rulesets.js");
 
-const work = join(tmpdir(), "dsh-1c-rules-deploy-test-" + process.pid);
-const home = join(work, "home");
-const project = join(work, "project");
-const payloadRoot = join(home, "1c-rules");
-
-let failures = 0;
-function check(label, condition, detail) {
-  if (condition) {
-    console.log("  ok   " + label);
-    return;
-  }
-  failures += 1;
-  console.log("  FAIL " + label + (detail === undefined ? "" : " — " + detail));
+let failed = 0;
+let total = 0;
+function check(name, ok, detail) {
+  total += 1;
+  if (!ok) failed += 1;
+  console.log(`  ${ok ? "ok  " : "FAIL"} ${name}${ok || detail === undefined ? "" : " — " + detail}`);
 }
 
 function write(file, text) {
@@ -38,196 +28,157 @@ function write(file, text) {
   writeFileSync(file, text, "utf8");
 }
 
-function buildPayload() {
-  write(
-    join(payloadRoot, "AGENTS.md"),
-    [
-      "# 1C Rules",
-      "",
-      "Hard gate is owned by `AGENTS.md`. Rules: `content/rules/gate.md`,",
-      "roles: `content/agents/worker.md`, commands: `content/commands/doctor.md`,",
-      "skills: `content/skills/demo/SKILL.md`. Model profile: `content/rules/model-<slug>.md`.",
-      "",
-    ].join("\n"),
-  );
-  write(join(payloadRoot, "content", "rules", "gate.md"), "См. `content/rules/other.md` и `AGENTS.md`.\n");
-  write(join(payloadRoot, "content", "rules", "other.md"), "Правило без ссылок.\n");
-  write(join(payloadRoot, "content", "agents", "worker.md"), "---\nname: worker\n---\nРоль из `content/rules/gate.md`.\n");
-  write(join(payloadRoot, "content", "commands", "doctor.md"), "---\ndescription: диагностика\n---\nПроверка.\n");
-  write(
-    join(payloadRoot, "content", "skills", "demo", "SKILL.md"),
-    "---\nname: demo\n---\nЗапусти `skills/demo/tools/run.ps1`, см. `content/rules/gate.md`.\n",
-  );
-  write(join(payloadRoot, "content", "skills", "demo", "tools", "run.ps1"), "Write-Host 'demo'\n");
-  write(
-    join(payloadRoot, "content", "openspec-bundle", "claude-code", ".claude", "skills", "openspec-propose", "SKILL.md"),
-    "---\nname: openspec-propose\n---\nПредложи изменение.\n",
-  );
-  write(join(payloadRoot, "openspec", "config.yaml"), "schema: spec-driven\n");
-  write(join(payloadRoot, "openspec", "project.md"), "# Проект\n");
-  write(join(payloadRoot, "USER-RULES.md"), "# Правила проекта\n\nДополнения команды.\n");
-  write(join(payloadRoot, "memory.md"), "# Память проекта\n");
-  write(join(payloadRoot, "LLM-RULES.md"), "# LLM Rules\n");
-  write(
-    join(payloadRoot, ".dev.env.example"),
-    ["# параметры проекта", "PLATFORM_PATH=", "PLATFORM_VERSION=", "INFOBASE_PATH=", "IB_USER=", "IB_PASSWORD=", "USE_EDT=false", "PREFIX=", ""].join("\n"),
-  );
-  write(
-    join(payloadRoot, "payload.json"),
-    JSON.stringify({
-      format: "dsh-desktop-payload",
-      formatVersion: 1,
-      id: "1c-rules",
-      name: "1c-rules",
-      version: "2026.09.16-test",
-      digest: "f".repeat(64),
-      catalog: { id: "dsh-desktop", version: "0.9.0-1" },
-      seededAt: new Date().toISOString(),
-    }, null, 2),
-  );
+function read(file) {
+  return readFileSync(file, "utf8");
 }
 
-function buildProject() {
-  write(join(project, "AGENTS.md"), "# Мой AGENTS\n\nНе трогать ветку main.\n");
-  write(join(project, "Configuration.xml"), "<Configuration><CompatibilityMode>8.3.24</CompatibilityMode></Configuration>\n");
-  write(join(project, ".gitignore"), "node_modules/\n");
-  write(
-    join(project, ".dsh", "1c-project.json"),
-    JSON.stringify({ infobasePath: "C:\\Bases\\Test", user: "Админ", password: "секрет", platformPath: "C:\\1cv8\\bin\\1cv8.exe" }, null, 2),
-  );
-}
+const work = mkdtempSync(join(tmpdir(), "dsh1c-rules-"));
+const home = join(work, "home");
+const payloadRoot = join(home, COMOL.payloadDir);
 
-const params = { infobasePath: "C:\\Bases\\Test", user: "Админ", password: "секрет", platformPath: "C:\\1cv8\\bin\\1cv8.exe" };
-const common = { platformPath: "", extraProjects: [] };
-const read = (rel) => readFileSync(join(project, rel), "utf8");
+write(
+  join(payloadRoot, "payload.json"),
+  JSON.stringify({ id: "comol", version: "2026.10.31-test", digest: "digest-test" }, null, 2),
+);
+write(
+  join(payloadRoot, "content", "rules", "module-structure.md"),
+  "Смотри `content/rules/help-corpus-retrieval.md` и `skills/demo/SKILL.md`.\n",
+);
+write(join(payloadRoot, "content", "agents", "explorer.md"), "# explorer\n");
+write(join(payloadRoot, "content", "commands", "updaterules.md"), "# updaterules\n");
+write(join(payloadRoot, "content", "skills", "demo", "SKILL.md"), "# demo\n");
+write(
+  join(payloadRoot, "content", "openspec-bundle", "claude-code", ".claude", "skills", "opsx", "SKILL.md"),
+  "# opsx\n",
+);
+write(join(payloadRoot, "openspec", "README.md"), "openspec workspace\n");
+write(
+  join(payloadRoot, ".dev.env.example"),
+  "PLATFORM_PATH=\nPLATFORM_VERSION=\nINFOBASE_PATH=\nIB_USER=\nUSE_EDT=\nPREFIX=\n",
+);
 
-rmSync(work, { recursive: true, force: true });
-buildPayload();
-buildProject();
+const project = join(work, "project");
+write(
+  join(project, "Configuration.xml"),
+  "<Configuration><CompatibilityMode>8.3.24</CompatibilityMode></Configuration>",
+);
 
-// ── Пакетные операции Конфигуратора ─────────────────────────────────────────
-// Неверный ключ платформа молча игнорирует, и операция «проходит успешно»,
-// ничего не сделав, — поэтому ключи проверяются буквально.
-console.log("пакетные операции: аргументы");
-const auth = { user: "Админ", password: "секрет", unlockCode: "123" };
-const base = { baseArg: "/FC:\\Bases\\Test", params: auth, logFile: "C:\\t\\out.log", resultFile: "C:\\t\\res.txt" };
+const params = {
+  infobasePath: "C:\\Bases\\Test",
+  user: "Админ",
+  password: "секрет",
+  platformPath: "C:\\1cv8\\bin\\1cv8.exe",
+};
+const common = { platformPath: "" };
 
-const dumpArgs = buildDesignerArgs({ ...base, operation: "dump", targetDir: "C:\\p\\src", format: "Plain" }).args;
-check("выгрузка: команда DESIGNER и база", dumpArgs[0] === "DESIGNER" && dumpArgs[1] === "/FC:\\Bases\\Test");
-check("выгрузка: /N /P /UC", dumpArgs.includes("/NАдмин") && dumpArgs.includes("/Pсекрет") && dumpArgs.includes("/UC123"));
-check("выгрузка: /DumpConfigToFiles с каталогом", dumpArgs.includes("/DumpConfigToFiles") && dumpArgs.includes("C:\\p\\src"));
-check("выгрузка: формат передан", dumpArgs[dumpArgs.indexOf("-Format") + 1] === "Plain");
-check("выгрузка: без -update по умолчанию", !dumpArgs.includes("-update"));
-check("выгрузка: /Out и /DumpResult", dumpArgs.includes("/OutC:\\t\\out.log") && dumpArgs.includes("/DumpResultC:\\t\\res.txt"));
-check("выгрузка: диалоги отключены", dumpArgs.includes("/DisableStartupDialogs") && dumpArgs.includes("/DisableStartupMessages"));
+console.log("реестр и payload");
+check("единственный набор — comol", COMOL.id === "comol" && COMOL.payloadDir === "1c-rules");
+check("payload найден", readPayload(home).ok === true);
+check("нет payload'а — понятная ошибка", readPayload(join(work, "empty")).ok === false);
 
-const incArgs = buildDesignerArgs({ ...base, operation: "dump", targetDir: "C:\\p", update: true }).args;
-check("инкрементальная выгрузка: -update -force", incArgs.includes("-update") && incArgs.includes("-force"));
+console.log("наш слой без comol");
+const plain = deployRules({ dshHome: home, projectPath: project, params, common });
+check("развёртывание прошло", plain.ok === true, plain.error);
+check("плейбук code.md на месте", existsSync(join(project, ".dsh", "rules-own", "code.md")));
+check("плейбук review.md на месте", existsSync(join(project, ".dsh", "rules-own", "review.md")));
+check("плейбук its.md на месте", existsSync(join(project, ".dsh", "rules-own", "its.md")));
+check("остальные плейбуки на месте", existsSync(join(project, ".dsh", "rules-own", "find.md")));
+check("AGENTS.md создан", existsSync(join(project, "AGENTS.md")));
+const agentsPlain = read(join(project, "AGENTS.md"));
+check("AGENTS.md без блока comol", !agentsPlain.includes("ruleset:comol:start"));
+check("в AGENTS.md есть маршрут к code.md", agentsPlain.includes(".dsh/rules-own/code.md"));
+check("в AGENTS.md есть маршрут к review.md", agentsPlain.includes(".dsh/rules-own/review.md"));
+check("в AGENTS.md есть маршрут к its.md", agentsPlain.includes(".dsh/rules-own/its.md"));
+check("USER-RULES.md создан", existsSync(join(project, "USER-RULES.md")));
+check("comol не развёрнут", !existsSync(join(project, ".dsh", "rules-1c")));
+check(".dev.env не создан", !existsSync(join(project, ".dev.env")));
+const envPlain = read(join(project, ".dsh", "rules-own", "environment.md"));
+check("справка без comol", !envPlain.includes(".dsh/rules-1c") && envPlain.includes(".dsh/rules-own"));
+const manifestPlain = JSON.parse(read(join(project, ".dsh", "1c-rules.json")));
+check("манифест: withComol=false", manifestPlain.withComol === false);
+check("сводка: развёрнуто без comol", rulesSummary(project).withComol === false);
 
-const extArgs = buildDesignerArgs({ ...base, operation: "extensions", targetDir: "C:\\p\\Extensions" }).args;
-check("расширения: свой каталог", extArgs[extArgs.indexOf("/DumpConfigToFiles") + 1] === "C:\\p\\Extensions");
-check("расширения: -AllExtensions и иерархический формат", extArgs.includes("-AllExtensions") && extArgs[extArgs.indexOf("-Format") + 1] === "Hierarchical");
+console.log("флажок comol");
+const withComol = deployRules({ dshHome: home, projectPath: project, withComol: true, params, common });
+check("развёртывание с comol прошло", withComol.ok === true, withComol.error);
+check("правила comol на месте", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("роли на месте", existsSync(join(project, ".dsh", "agents-1c", "explorer.md")));
+check("команды на месте", existsSync(join(project, ".dsh", "commands-1c", "updaterules.md")));
+check("навыки на месте", existsSync(join(project, ".dsh", "skills", "demo", "SKILL.md")));
+check("навыки openspec на месте", existsSync(join(project, ".dsh", "skills", "opsx", "SKILL.md")));
+check("openspec workspace на месте", existsSync(join(project, "openspec", "README.md")));
+check("блок comol в AGENTS.md", read(join(project, "AGENTS.md")).includes("ruleset:comol:start"));
+const rewritten = read(join(project, ".dsh", "rules-1c", "module-structure.md"));
+check(
+  "ссылки переписаны на проектные",
+  rewritten.includes(".dsh/rules-1c/help-corpus-retrieval.md") &&
+    rewritten.includes(".dsh/skills/demo/SKILL.md"),
+  rewritten,
+);
+check(".dev.env создан", existsSync(join(project, ".dev.env")));
+check(
+  "пароль в .dev.env не записан",
+  !read(join(project, ".dev.env")).includes("IB_PASSWORD") && !read(join(project, ".dev.env")).includes("секрет"),
+);
+check("манифест: withComol=true", JSON.parse(read(join(project, ".dsh", "1c-rules.json"))).withComol === true);
+const statusOn = rulesStatus({ dshHome: home, projectPath: project });
+check("состояние: comol развёрнут", statusOn.withComol === true && statusOn.counts.files > 10);
+check("состояние: правок нет", statusOn.modified.length === 0, statusOn.modified.join(", "));
 
-const loadArgs = buildDesignerArgs({ ...base, operation: "load", sourceDir: "C:\\p\\src", format: "Hierarchical" }).args;
-check("загрузка: /LoadConfigFromFiles с каталогом", loadArgs.includes("/LoadConfigFromFiles") && loadArgs.includes("C:\\p\\src"));
-check("загрузка: обновление базы по умолчанию", loadArgs.includes("/UpdateDBCfg"));
-check("загрузка: динамическое обновление", loadArgs.includes("-Dynamic+") && loadArgs.includes("-SessionTerminate") && loadArgs.includes("force"));
-
-const staticLoad = buildDesignerArgs({ ...base, operation: "load", sourceDir: "C:\\p", dynamic: false }).args;
-check("загрузка без динамики: -Dynamic+ нет", staticLoad.includes("/UpdateDBCfg") && !staticLoad.includes("-Dynamic+"));
-
-const noUpdate = buildDesignerArgs({ ...base, operation: "load", sourceDir: "C:\\p", updateDb: false }).args;
-check("загрузка без обновления БД: /UpdateDBCfg нет", !noUpdate.includes("/UpdateDBCfg"));
-
-const anon = buildDesignerArgs({ operation: "dump", baseArg: "/S\"srv\\base\"", params: {}, targetDir: "C:\\p", logFile: "l", resultFile: "r" }).args;
-check("без аутентификации: /N и /P не передаются", !anon.some((a) => a.startsWith("/N") || a.startsWith("/P")));
-check("серверная база: строка соединения на месте", anon[1] === "/S\"srv\\base\"");
-
-check("неизвестная операция отклоняется", (() => {
-  try {
-    buildDesignerArgs({ operation: "erase", baseArg: "/F", targetDir: "x", logFile: "l", resultFile: "r" });
-    return false;
-  } catch {
-    return true;
-  }
-})());
-
-console.log("набор правил");
-const payload = readPayload(home);
-check("payload читается", payload.ok === true, payload.error);
-check("версия из манифеста", payload.manifest?.version === "2026.09.16-test");
-
-console.log("предпросмотр");
-const preview = deployRules({ dshHome: home, projectPath: project, params, common, dryRun: true });
-check("предпросмотр проходит", preview.ok === true, preview.error);
-check("после предпросмотра ничего не записано", !existsSync(join(project, ".dsh", "skills")));
-check("чужой AGENTS.md на месте", read("AGENTS.md").includes("Не трогать ветку main"));
-
-console.log("развёртывание");
-const deployed = deployRules({ dshHome: home, projectPath: project, params, common });
-check("развёртывание проходит", deployed.ok === true, deployed.error);
-check("правило на месте", existsSync(join(project, ".dsh", "rules-1c", "gate.md")));
-check("роль на месте", existsSync(join(project, ".dsh", "agents-1c", "worker.md")));
-check("сценарий на месте", existsSync(join(project, ".dsh", "commands-1c", "doctor.md")));
-check("навык на месте", existsSync(join(project, ".dsh", "skills", "demo", "SKILL.md")));
-check("скрипт навыка на месте", existsSync(join(project, ".dsh", "skills", "demo", "tools", "run.ps1")));
-check("openSpec-навык на месте", existsSync(join(project, ".dsh", "skills", "openspec-propose", "SKILL.md")));
-check("openSpec workspace развёрнут", existsSync(join(project, "openspec", "config.yaml")));
-check("манифест развёртывания записан", existsSync(join(project, ".dsh", "1c-rules.json")));
-
-console.log("переписывание ссылок");
-const entry = read("AGENTS.md");
-check("AGENTS.md стал управляемым", entry.includes("managed by dsh-1c-project-properties"));
-check("не осталось content/-ссылок", !/content\/(rules|agents|commands|skills)\//u.test(entry), entry.match(/content\/[a-z]+\/[^\s`,)]*/gu)?.join(", "));
-check("ссылки ведут в .dsh/rules-1c", entry.includes(".dsh/rules-1c/gate.md"));
-check("плейсхолдер model-<slug> переписан", entry.includes(".dsh/rules-1c/model-<slug>.md"));
-check("ссылка на AGENTS.md сохранена", entry.includes("`AGENTS.md`"));
-const rule = read(".dsh/rules-1c/gate.md");
-check("ссылки внутри правил переписаны", rule.includes(".dsh/rules-1c/other.md") && !rule.includes("content/rules/"));
-const skill = read(".dsh/skills/demo/SKILL.md");
-check("путь к скриптам навыка переписан", skill.includes(".dsh/skills/demo/tools/run.ps1"));
-check("уже переписанный путь не портится", rewritePaths(".dsh/skills/x/tools/y.ps1") === ".dsh/skills/x/tools/y.ps1");
-
-console.log("чужой AGENTS.md");
-check("сохранён в бэкап", existsSync(join(project, "AGENTS.md.bak.md")));
-check("текст пользователя вклеен в USER-RULES.md", read("USER-RULES.md").includes("Не трогать ветку main"));
-check("вклейка помечена маркерами", read("USER-RULES.md").includes("1c-rules:migrated:start"));
-
-console.log(".dev.env");
-const env = read(".dev.env");
-check("путь к базе перенесён", /^INFOBASE_PATH=C:\\Bases\\Test$/mu.test(env));
-check("пользователь перенесён", /^IB_USER=Админ$/mu.test(env));
-check("версия из Configuration.xml", /^PLATFORM_VERSION=8\.3\.24$/mu.test(env));
-check("пароль не перенесён без опции", /^IB_PASSWORD=$/mu.test(env));
-check("комментарий примера сохранён", env.includes("# параметры проекта"));
-check("предупреждение про .gitignore", deployed.warnings.some((line) => line.includes(".gitignore")));
-
-console.log("идемпотентность");
-const again = deployRules({ dshHome: home, projectPath: project, params: {}, common });
-check("повтор ничего не пишет", again.summary.written === 0, JSON.stringify(again.summary));
-check("повтор ничего не удаляет", again.summary.removed === 0);
-check("состояние: развёрнуто", rulesStatus({ dshHome: home, projectPath: project }).deployed === true);
+console.log("снятый флажок не удаляет");
+const off = deployRules({ dshHome: home, projectPath: project, withComol: false, params, common });
+check("развёртывание без comol прошло", off.ok === true, off.error);
+check("файлы comol остались", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("блок comol убран из AGENTS.md", !read(join(project, "AGENTS.md")).includes("ruleset:comol:start"));
+check("манифест: withComol=false", JSON.parse(read(join(project, ".dsh", "1c-rules.json"))).withComol === false);
 
 console.log("правки пользователя");
-write(join(project, ".dsh", "rules-1c", "gate.md"), read(".dsh/rules-1c/gate.md") + "\n<!-- моя правка -->\n");
-const afterEdit = deployRules({ dshHome: home, projectPath: project, params: {}, common });
-check("правка не перезаписана", read(".dsh/rules-1c/gate.md").includes("моя правка"));
-check("правка попала в отчёт как сохранённая", afterEdit.summary.preserved >= 1);
-check("статус видит правку", rulesStatus({ dshHome: home, projectPath: project }).modified.includes(".dsh/rules-1c/gate.md"));
+const codeFile = join(project, ".dsh", "rules-own", "code.md");
+const original = read(codeFile);
+write(codeFile, original + "\n<!-- моя правка -->\n");
+const again = deployRules({ dshHome: home, projectPath: project, withComol: true, params, common });
+check("правка не перезаписана", read(codeFile).includes("<!-- моя правка -->"));
+check(
+  "отчёт: файл сохранён",
+  again.files.some((file) => file.status === "preserved" && file.path === ".dsh/rules-own/code.md"),
+);
 
-console.log("удаление");
+console.log("чужой AGENTS.md");
+const project2 = join(work, "project-foreign");
+write(join(project2, "Configuration.xml"), "<Configuration/>");
+write(join(project2, "AGENTS.md"), "# Чужой AGENTS\n\nНе трогать.\n");
+const foreign = deployRules({ dshHome: home, projectPath: project2, params, common });
+check("развёртывание прошло", foreign.ok === true, foreign.error);
+check("прежний AGENTS.md сохранён", existsSync(join(project2, "AGENTS.md.bak.md")));
+check(
+  "прежний текст вклеен в USER-RULES.md",
+  read(join(project2, "USER-RULES.md")).includes("Перенесено из AGENTS.md") &&
+    read(join(project2, "USER-RULES.md")).includes("# Чужой AGENTS"),
+);
+
+console.log("удаление правил");
 const removed = removeRules({ projectPath: project });
-check("прежний AGENTS.md возвращён", read("AGENTS.md").includes("Не трогать ветку main"));
-check("управляемого AGENTS.md больше нет", !read("AGENTS.md").includes("managed by dsh-1c-project-properties"));
-check("файл с правкой пользователя оставлен", existsSync(join(project, ".dsh", "rules-1c", "gate.md")));
-check("остальные правила удалены", !existsSync(join(project, ".dsh", "rules-1c", "other.md")));
-check("роли удалены", !existsSync(join(project, ".dsh", "agents-1c")));
-check("навыки удалены", !existsSync(join(project, ".dsh", "skills")));
-check("USER-RULES.md оставлен", existsSync(join(project, "USER-RULES.md")));
-check("memory.md оставлен", existsSync(join(project, "memory.md")));
+check("удаление прошло", removed.ok === true, removed.error);
+check("AGENTS.md удалён", !existsSync(join(project, "AGENTS.md")));
+check("USER-RULES.md остался", existsSync(join(project, "USER-RULES.md")));
 check("манифест удалён", !existsSync(join(project, ".dsh", "1c-rules.json")));
-check("отчёт об удалении непустой", removed.removed.length > 0 && removed.restored === "AGENTS.md");
+check("файлы comol удалены", !existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("правка пользователя осталась", existsSync(codeFile) && read(codeFile).includes("<!-- моя правка -->"));
 
-rmSync(work, { recursive: true, force: true });
-console.log(failures === 0 ? "\nвсе проверки пройдены" : "\nпровалено проверок: " + failures);
-process.exit(failures === 0 ? 0 : 1);
+console.log("переписывание ссылок");
+const paths = rewritePaths("content/rules/a.md content/agents/b.md content/commands/c.md skills/x/SKILL.md");
+check(
+  "все виды ссылок",
+  paths.includes(".dsh/rules-1c/a.md") &&
+    paths.includes(".dsh/agents-1c/b.md") &&
+    paths.includes(".dsh/commands-1c/c.md") &&
+    paths.includes(".dsh/skills/x/SKILL.md"),
+  paths,
+);
+
+console.log("");
+if (failed > 0) {
+  console.log(`провалено ${failed} из ${total}`);
+  process.exit(1);
+}
+console.log(`все проверки пройдены (${total})`);

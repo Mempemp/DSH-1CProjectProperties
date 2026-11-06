@@ -32,7 +32,8 @@ window.__ModuleLoader__.load({
     const API = "/1cprops";
     const PLATFORM_LIST_ID = "dsh-1cprops-platforms";
     const INFOBASE_LIST_ID = "dsh-1cprops-infobases";
-    // Набор, который раскладывает кнопка «Развернуть» — ссылка в заголовке карточки.
+    // Ссылка на набор по умолчанию: она же запасная для хоста, который ещё не
+    // присылает rulesPayloads.list со ссылками на каждый набор.
     const RULES_REPO = "https://github.com/comol/ai_rules_1c";
 
     async function request(path, init) {
@@ -53,7 +54,13 @@ window.__ModuleLoader__.load({
             "плагина или он упал при загрузке: причина в журнале DSH.",
           );
         }
-        throw new Error(detail);
+        // Тело бывает не отказом: /rules-deploy отвечает ok:false вместе с
+        // needsConfirmation и планом смены набора. Вызывающий успевает прочитать
+        // error.data, прежде чем показать ошибку.
+        const error = new Error(detail);
+        error.status = response.status;
+        error.data = data;
+        throw error;
       }
       return data;
     }
@@ -139,6 +146,7 @@ window.__ModuleLoader__.load({
 .p1c-check-row { display: inline-flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.4; cursor: pointer; padding: 2px 0; }
 .p1c-check-row--compact { font-size: 11px; opacity: .7; }
 .p1c-check-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--p1c-primary); cursor: pointer; }
+.p1c-check { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; accent-color: var(--p1c-primary); cursor: pointer; }
 .p1c-check-row.is-disabled { opacity: .45; pointer-events: none; }
 
 .p1c-btn {
@@ -216,6 +224,24 @@ window.__ModuleLoader__.load({
 .p1c-dialog__foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--p1c-border); }
 .p1c-dialog__footleft { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .p1c-dialog__footright { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+/* Окно правил: три колонки фиксированной высоты, прокручиваются списки, а не
+   всё окно. Иначе описание правила уезжает за форму, а категории ломаются. */
+.p1c-bsl-rules { display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; gap: 12px; height: min(56vh, 520px); min-height: 320px; overflow: hidden; }
+.p1c-bsl-rules__col { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
+.p1c-bsl-rules__scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+.p1c-bsl-rules__scroll::-webkit-scrollbar { width: 8px; }
+.p1c-bsl-rules__scroll::-webkit-scrollbar-thumb { background: rgba(127,127,127,.28); border-radius: 8px; }
+.p1c-bsl-rules__row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.p1c-bsl-rules__row:hover { background: rgba(127,127,127,.09); }
+.p1c-bsl-rules__row.is-active { background: rgba(80,120,255,.16); }
+.p1c-bsl-rules__row.is-muted .p1c-bsl-rules__name { opacity: .5; }
+.p1c-bsl-rules__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1c-bsl-rules__count { flex: 0 0 auto; font-size: 11px; opacity: .6; font-variant-numeric: tabular-nums; }
+.p1c-bsl-rules__sev { flex: 0 0 auto; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+.p1c-bsl-rules__title { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.p1c-bsl-rules__meta { font-size: 11px; opacity: .6; }
+.p1c-bsl-rules__desc { font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.p1c-bsl-rules__empty { font-size: 11.5px; opacity: .6; padding: 6px 2px; }
 
 .p1c-details { border-top: 1px dashed var(--p1c-border); padding-top: 10px; }
 .p1c-details > summary { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; opacity: .75; cursor: pointer; list-style: none; }
@@ -256,10 +282,121 @@ window.__ModuleLoader__.load({
 .p1c-row { display: flex; align-items: baseline; gap: 12px; font-size: 12.5px; }
 .p1c-row__key { flex: 0 0 auto; min-width: 96px; opacity: .62; }
 .p1c-row__value { flex: 1 1 auto; min-width: 0; font-weight: 500; word-break: break-word; }
+
+/* Замечание в панели: позиция слева, текст справа. Без этого строки
+   слипались в один абзац и панель было невозможно читать. */
+.p1c-path { overflow-wrap: anywhere; word-break: break-word; opacity: .75; }
+/* Замечание в узкой панели: строка метаданных сверху, текст на всю ширину.
+   Раскладка «позиция слева, текст справа» съедала текст в колонку в 15 символов. */
+.p1c-finding { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; margin: 0 -8px; border-radius: 8px; }
+.p1c-finding:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); }
+.p1c-finding--skipped { opacity: .45; }
+.p1c-finding__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.p1c-finding__pos { flex: 0 0 auto; font-size: 11px; opacity: .55; }
+.p1c-finding__code { font-size: 10.5px; opacity: .45; margin-top: -2px; overflow-wrap: anywhere; }
+.p1c-finding__msg { font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.p1c-actions > .p1c-input { flex: 1 1 0; width: auto; min-width: 0; }
+
+/* Важность: тот же язык, что в окне правил — цвет читается быстрее слова. */
+.p1c-sev { font-size: 10.5px; line-height: 1.6; padding: 0 6px; border-radius: 5px; letter-spacing: .02em; text-transform: lowercase; }
+.p1c-sev--blocker, .p1c-sev--critical, .p1c-sev--error { color: var(--p1c-danger); background: rgba(229,115,115,.14); }
+.p1c-sev--major, .p1c-sev--warning { color: var(--p1c-warn); background: rgba(224,160,48,.16); }
+.p1c-sev--minor { color: var(--dsw-alias-label-secondary, #a6acb8); background: rgba(127,127,127,.14); }
+.p1c-sev--info, .p1c-sev--hint { color: var(--dsw-alias-label-tertiary, #8a909b); background: rgba(127,127,127,.1); }
+
+.p1c-finding__acts { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; flex: 0 0 auto; white-space: nowrap; }
+.p1c-finding__skip {
+  flex: 0 0 auto; border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--dsw-alias-label-secondary, inherit); font: inherit; font-size: 11px; line-height: 1.6;
+  border-radius: 4px;
+}
+.p1c-finding__skip:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: underline; }
+
+/* Панель сайдбара: карточки на своей подложке, иначе блоки сливаются с фоном
+   и выглядят как непрогруженные. */
+/* Подтверждение действия поверх окна: тёмная поверхность в обеих темах,
+   как у тостов DSH. Кликов не перехватывает. */
+.p1c-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  z-index: 2147483000; display: flex; justify-content: center;
+  max-width: min(640px, calc(100vw - 48px)); pointer-events: none;
+}
+.p1c-toast__pill {
+  display: inline-flex; align-items: center; padding: 12px 16px;
+  border-radius: var(--dsw-radius-lg, 16px);
+  background: var(--dsw-alias-toast-bg, #353638);
+  color: var(--dsw-alias-toast-label, #fff);
+  font-family: var(--dsw-font-family, inherit); font-size: 14px; line-height: 22px;
+  box-shadow: var(--dsw-shadow-lv3, 0 0 1px rgba(0,0,0,.2), 0 12px 32px rgba(0,0,0,.16));
+  animation: p1c-toast-in .16s ease-out;
+}
+.p1c-toast--leaving .p1c-toast__pill { animation: p1c-toast-out .2s ease-in forwards; }
+@keyframes p1c-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes p1c-toast-out { to { opacity: 0; transform: translateY(4px); } }
+
+/* Панель прокручивается сама и берёт поверхность родного сайдбара DSH:
+   иначе она читается как чужой островок рядом с его деревом. */
+.p1c-root--panel {
+  gap: 6px; height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+/* Шапка: время проверки слева, пропущенные — ссылкой справа. */
+.p1c-panelhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 0 2px; }
+.p1c-panelhead__meta {
+  min-width: 0; font-size: 11.5px; color: var(--dsw-alias-label-tertiary, inherit);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.p1c-linkbtn {
+  border: 0; background: none; padding: 0; cursor: pointer; font: inherit; font-size: 11.5px;
+  color: var(--dsw-alias-state-business-primary, var(--p1c-primary)); border-radius: 4px;
+}
+.p1c-linkbtn { flex: 0 0 auto; white-space: nowrap; }
+.p1c-linkbtn:hover { text-decoration: underline; }
+
+/* Список — плоский, как дерево файлов в сайдбаре: разделитель волоском,
+   никаких рамок и подложек. */
+
+/* Заголовок модуля — кнопка: сворачивает замечания. */
+.p1c-filehead {
+  display: flex; align-items: flex-start; gap: 6px; width: 100%; padding: 2px 0;
+  border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  border-radius: 6px;
+}
+.p1c-filehead:hover { color: var(--dsw-alias-label-primary, inherit); }
+.p1c-filehead:focus-visible { outline: 2px solid var(--p1c-primary); outline-offset: 2px; }
+.p1c-chevron { flex: 0 0 auto; margin-top: 3px; color: var(--dsw-alias-label-secondary, inherit); transition: transform .15s ease; }
+.p1c-chevron--folded { transform: rotate(-90deg); }
+.p1c-filehead .p1c-path {
+  flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+.p1c-filehead__count { flex: 0 0 auto; font-size: 11px; color: var(--dsw-alias-label-tertiary, currentColor); }
+.p1c-root--panel .p1c-card {
+  background: var(--dsw-alias-bg-layer-2, rgba(127,127,127,.07));
+  border-color: var(--dsw-alias-border-l2, rgba(127,127,127,.2));
+  border-radius: 10px; padding: 10px 12px; gap: 8px;
+}
+/* Строка набора: имя и подпись слева, действия справа; на узком экране
+   действия уходят на свою строку. */
+.p1c-preset { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 0; border-top: 1px solid var(--p1c-border); }
+.p1c-preset:first-child { border-top: 0; padding-top: 0; }
+.p1c-preset__acts { display: flex; gap: 8px; margin-left: auto; }
+.p1c-preset .p1c-row__key, .p1c-preset .p1c-input { min-width: 0; }
+
+.p1c-root--panel .p1c-btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
+.p1c-root--panel .p1c-btn--ghost { border-color: var(--dsw-alias-hairline, var(--p1c-border)); }
+.p1c-root--panel .p1c-btn--ghost:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.1)); }
+.p1c-root--panel .p1c-input { height: 30px; }
+.p1c-root--panel .p1c-note { color: var(--dsw-alias-label-tertiary, inherit); opacity: 1; }
+.p1c-root--panel .p1c-card__hint { opacity: 1; color: var(--dsw-alias-label-tertiary, inherit); }
 /* Шаги визарда: серая полоса на весь путь, текущий шаг — зелёным свечением. */
 /* Окно визарда одной высоты на всех шагах: страницы не раскачивают его размер.
    Считано по самой большой странице — «База и платформа». */
 .p1c-dialog__body--wizard { height: 480px; max-height: calc(100vh - 226px); overflow-y: auto; scrollbar-gutter: stable; }
+/* Окно проекта тоже одной высоты: карточки внутри меняются (набор правил,
+   параметры, результат операции), а размер окна прыгать не должен. */
+.p1c-dialog__body--project { height: min(640px, calc(100vh - 200px)); scrollbar-gutter: stable; }
 .p1c-check-line--status { font-size: 12px; align-items: center; min-height: 18px; }
 .p1c-card .p1c-details { margin-top: 2px; }
 .p1c-details .p1c-grid { margin-top: 8px; }
@@ -272,6 +409,29 @@ window.__ModuleLoader__.load({
 .p1c-step.is-current .p1c-step__label { opacity: .9; }
 .p1c-check-line { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
 .p1c-check-line .p1c-dot { margin-top: 0; }
+
+/* Выбор набора правил: радио и ровно одна строка подсказки под каждым вариантом.
+   Переносить подсказку на вторую строку нельзя — страницы визарда и карточки
+   держат одну высоту, длинный текст показывает title. */
+.p1c-radios { display: flex; flex-direction: column; gap: 6px; }
+.p1c-radio { display: flex; align-items: flex-start; gap: 8px; width: 100%; }
+/* Обёртка подписи — flex-элемент радио: без min-width: 0 длинная подсказка
+   не обрезается, а растягивает строку. */
+.p1c-radio > span { flex: 1 1 auto; min-width: 0; }
+.p1c-radio__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.p1c-radio__title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; line-height: 1.4; }
+.p1c-radio__hint { font-size: 11px; line-height: 1.4; opacity: .58; }
+.p1c-radio__badge {
+  flex: 0 0 auto; font-size: 10.5px; line-height: 1.6; padding: 0 6px; border-radius: 999px;
+  border: 1px solid var(--p1c-border); opacity: .7; white-space: nowrap;
+}
+/* Подтверждение смены набора — узкое окно поверх окна проекта. */
+.p1c-dialog--confirm { width: 520px; }
+.p1c-plan {
+  max-height: 150px; overflow: auto; padding: 8px 10px; border-radius: 8px;
+  background: rgba(127,127,127,.08); display: flex; flex-direction: column; gap: 1px;
+}
+.p1c-plan__line { font-size: 11px; line-height: 1.45; opacity: .8; word-break: break-all; }
 `;
 
     let stylesInjected = false;
@@ -287,6 +447,1249 @@ window.__ModuleLoader__.load({
     // ── мелкие строительные блоки ────────────────────────────────────────────
 
     const cx = (...parts) => parts.filter(Boolean).join(" ");
+
+    // «4 замечания», а не «4 замечаний»: число видно в панели постоянно.
+    function plural(count, forms) {
+      const value = Math.abs(Number(count) || 0);
+      const tail = value % 100;
+      if (tail >= 11 && tail <= 14) return forms[2];
+      const last = value % 10;
+      if (last === 1) return forms[0];
+      if (last >= 2 && last <= 4) return forms[1];
+      return forms[2];
+    }
+
+    // ── проверки кода (bsl-analyzer) ─────────────────────────────────────────
+    // Карточка живёт в параметрах проекта и в визарде, окно правил — поверх них.
+    // Проверку запускает агент; здесь только включение, набор и правка набора.
+    const CHECKS = "/bsl-checks";
+
+    // В параметрах проекта — только включение и выбор набора: там пользователь
+    // решает про проект, а не про правила. Движок, наборы и правка правил живут
+    // на отдельной вкладке настроек «1С: Анализ кода».
+    function ChecksCard(props) {
+      const projectPath = props.path;
+      const [state, setState] = useState(null);
+      const [error, setError] = useState("");
+      const [busy, setBusy] = useState(false);
+      injectStyles();
+
+      const load = useCallback(async () => {
+        const data = await request(CHECKS + "/state?project=" + encodeURIComponent(projectPath));
+        setState(data);
+        setError("");
+        return data;
+      }, [projectPath]);
+
+      useEffect(() => {
+        let alive = true;
+        load().catch((cause) => {
+          if (alive) setError(cause.message);
+        });
+        return () => {
+          alive = false;
+        };
+      }, [load]);
+
+      const toggle = async () => {
+        setBusy(true);
+        try {
+          const data = await request(CHECKS + "/toggle", {
+            method: "POST",
+            body: JSON.stringify({ project: projectPath, enabled: !(state && state.enabled) }),
+          });
+          setState(data);
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const selectPreset = async (event) => {
+        setBusy(true);
+        try {
+          const data = await request(CHECKS + "/preset", {
+            method: "POST",
+            body: JSON.stringify({ project: projectPath, action: "select", presetId: event.target.value }),
+          });
+          setState(data);
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      if (!state) {
+        return jsx(Card, {
+          title: "Статический анализ кода",
+          children: jsx("div", { className: "p1c-note", children: error || "читаю настройки…" }),
+        });
+      }
+
+      const presets = state.presets || [];
+      const total = state.catalog ? state.catalog.total : 0;
+
+      return jsxs(Card, {
+        title: "Статический анализ кода",
+        children: [
+          jsxs("div", {
+            className: "p1c-row",
+            children: [
+              jsx("span", { className: "p1c-row__key", children: "Включить анализ кода" }),
+              jsx("input", {
+                type: "checkbox",
+                className: "p1c-check",
+                checked: state.enabled,
+                disabled: busy,
+                onChange: toggle,
+              }),
+            ],
+          }),
+          jsxs("div", {
+            className: "p1c-row",
+            children: [
+              jsx("span", { className: "p1c-row__key", children: "Набор правил" }),
+              jsx("span", {
+                className: "p1c-row__value",
+                children: jsx("select", {
+                  className: "p1c-select",
+                  value: state.presetId,
+                  disabled: busy || !state.enabled,
+                  onChange: selectPreset,
+                  children: presets.map((preset) =>
+                    jsx("option", {
+                      value: preset.id,
+                      children: preset.name + " · " + preset.enabled + " из " + total,
+                    }),
+                  ),
+                }),
+              }),
+            ],
+          }),
+          state.presetFallback
+            ? jsx("div", {
+                className: "p1c-note p1c-note--warn",
+                children:
+                  "Набор, выбранный раньше, не найден: используется «" + state.presetName + "». Свой набор можно выбрать здесь же.",
+              })
+            : null,
+          error ? jsx("div", { className: "p1c-note p1c-note--warn", children: error }) : null,
+        ],
+      });
+    }
+
+    // Вкладка настроек: анализатор и наборы правил. Проектов здесь нет —
+    // в проекте выбирают набор, а правила, копии и движок живут тут.
+    function ChecksSection() {
+      const [data, setData] = useState(null);
+      const [error, setError] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [rulesFor, setRulesFor] = useState("");
+      const [renaming, setRenaming] = useState("");
+      const [renameDraft, setRenameDraft] = useState("");
+      const [deleting, setDeleting] = useState("");
+      const [newName, setNewName] = useState("");
+      const [newBase, setNewBase] = useState("");
+      const [naparnik, setNaparnik] = useState(null);
+      const [budget, setBudget] = useState(null);
+      const [budgetBusy, setBudgetBusy] = useState(false);
+      const [token, setToken] = useState("");
+      const [tokenSaving, setTokenSaving] = useState(false);
+      const [tokenNote, setTokenNote] = useState("");
+      injectStyles();
+
+      const load = useCallback(async () => {
+        const [payload, naparnikPayload, budgetPayload] = await Promise.all([
+          request(CHECKS + "/presets"),
+          request(CHECKS + "/naparnik").catch(() => null),
+          request(CHECKS + "/naparnik-budget").catch(() => null),
+        ]);
+        setData(payload);
+        setNewBase((current) => current || ((payload.presets && payload.presets[0] && payload.presets[0].id) || ""));
+        setNaparnik(naparnikPayload);
+        setBudget(budgetPayload ? budgetPayload.budget : null);
+        setError("");
+        return payload;
+      }, []);
+
+      useEffect(() => {
+        load().catch((cause) => setError(cause.message));
+      }, [load]);
+
+      // Наборы живут на машине: правки не привязаны к проекту.
+      const act = async (payload) => {
+        setBusy(true);
+        try {
+          const next = await request(CHECKS + "/preset", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          setData(next);
+          setError("");
+          return next;
+        } catch (cause) {
+          setError(cause.message);
+          return null;
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const download = async () => {
+        setBusy(true);
+        try {
+          await request(CHECKS + "/engine", { method: "POST", body: JSON.stringify({ download: true }) });
+          await load();
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      // Токен Напарника — единственное значение вкладки, которое пользователь
+      // вводит руками. Хранится в общих настройках плагина, не в проекте.
+      // Квота ключа: та же, что жжёт веб-морда Напарника, поэтому смотрим перед пачкой ревью.
+      const refreshBudget = async () => {
+        setBudgetBusy(true);
+        try {
+          const payload = await request(CHECKS + "/naparnik-budget");
+          setBudget(payload.budget);
+        } catch (cause) {
+          setBudget({ ok: false, error: cause.message });
+        } finally {
+          setBudgetBusy(false);
+        }
+      };
+
+      const saveToken = async () => {
+        setTokenSaving(true);
+        setTokenNote("");
+        try {
+          const result = await request(CHECKS + "/naparnik", {
+            method: "POST",
+            body: JSON.stringify({ token }),
+          });
+          setNaparnik(result);
+          setToken("");
+          setTokenNote(
+            result.registered
+              ? "Токен сохранён, сервер подключён: агент видит " + result.server + "."
+              : "Токен сохранён, сервер не подключён: " + (result.error || "причина неизвестна"),
+          );
+        } catch (cause) {
+          setTokenNote(cause.message);
+        } finally {
+          setTokenSaving(false);
+        }
+      };
+
+      if (!data) {
+        return jsxs("div", {
+          className: "p1c-root p1c-stack",
+          children: [
+            jsx("div", { className: "p1c-title", children: "1С: Анализ кода" }),
+            jsx("div", { className: "p1c-note", children: error || "читаю настройки…" }),
+          ],
+        });
+      }
+
+      const engine = data.engine || {};
+      const engineReady = Boolean(engine.downloaded);
+      const total = data.catalog ? data.catalog.total : 0;
+      const presets = data.presets || [];
+      const budgetText = (() => {
+        if (!budget) return "не проверялся";
+        if (budget.ok !== true) return budget.error || "нет данных";
+        const share = (window) => (window ? window.percent + " %" : "окно не активно");
+        const reset = budget.weekly && budget.weekly.resetsAt
+          ? " · сброс недели " +
+            new Date(budget.weekly.resetsAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+          : "";
+        return "5 ч: " + share(budget.sliding5h) + " · неделя: " + share(budget.weekly) + reset;
+      })();
+      const naparnikStateText = !naparnik
+        ? "читаю…"
+        : naparnik.registered
+          ? "подключён как " + naparnik.server
+          : !naparnik.engine || !naparnik.engine.downloaded
+            ? "ждёт движок bsl-analyzer"
+            : !naparnik.tokenSet
+              ? "ждёт токен"
+              : naparnik.error || "не подключён";
+
+      return jsxs("div", {
+        className: "p1c-root p1c-stack",
+        children: [
+          jsxs("div", {
+            children: [
+              jsx("div", { className: "p1c-title", children: "1С: Анализ кода" }),
+              jsx("div", {
+                className: "p1c-subtitle",
+                children: "Проверки статическим анализатором bsl-analyzer. Набор правил проект выбирает сам, наборы общие для машины.",
+              }),
+            ],
+          }),
+          jsxs("div", {
+            className: "p1c-card",
+            children: [
+              jsx("div", { className: "p1c-card__title", children: "bsl-analyzer" }),
+              jsxs("div", {
+                className: "p1c-row",
+                children: [
+                  jsx("span", { className: "p1c-row__key", children: "Состояние" }),
+                  jsx("span", {
+                    className: "p1c-row__value p1c-sm",
+                    children: engineReady
+                      ? "установлен" + (engine.sizeMb ? " · " + engine.sizeMb + " МБ" : "")
+                      : engine.supported
+                        ? "не скачан"
+                        : "для этой платформы сборка не закреплена",
+                  }),
+                ],
+              }),
+              engineReady && engine.path ? jsx("div", { className: "p1c-note p1c-mono p1c-sm", children: engine.path }) : null,
+              jsxs("div", {
+                className: "p1c-actions",
+                children: [
+                  jsx(Btn, {
+                    variant: engineReady ? undefined : "primary",
+                    disabled: busy || !engine.supported,
+                    onClick: download,
+                    children: engineReady ? "Проверить установку" : "Скачать bsl-analyzer",
+                  }),
+                  jsx("span", {
+                    className: "p1c-note",
+                    children: "Один раз, около 76 МБ. Дальше проверки идут без интернета.",
+                  }),
+                ],
+              }),
+            ],
+          }),
+          jsxs("div", {
+            className: "p1c-card",
+            children: [
+              jsx("div", { className: "p1c-card__title", children: "1С:Напарник" }),
+              jsx("div", {
+                className: "p1c-note",
+                children:
+                  "Ответы по стандартам разработки ИТС, БСП и методическим материалам словами. Агент спрашивает их инструментом its_help; справка по API платформы и поиск по документации — у других серверов.",
+              }),
+              jsxs("div", {
+                className: "p1c-row",
+                children: [
+                  jsx("span", { className: "p1c-row__key", children: "Токен" }),
+                  jsx("span", {
+                    className: "p1c-row__value",
+                    children: jsx("input", {
+                      className: "p1c-input",
+                      type: "text",
+                      spellCheck: false,
+                      autoComplete: "off",
+                      placeholder:
+                        naparnik && naparnik.tokenSet
+                          ? "задан, оканчивается на " + naparnik.tokenTail
+                          : "вставьте токен с code.1c.ai/tokens",
+                      value: token,
+                      disabled: tokenSaving,
+                      onChange: (event) => setToken(event.target.value),
+                    }),
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-row",
+                children: [
+                  jsx("span", { className: "p1c-row__key", children: "MCP-сервер" }),
+                  jsx("span", { className: "p1c-row__value p1c-sm", children: naparnikStateText }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-row",
+                children: [
+                  jsx("span", { className: "p1c-row__key", children: "Бюджет" }),
+                  jsx("span", {
+                    className: "p1c-row__value p1c-sm",
+                    style: { display: "flex", gap: "10px", alignItems: "center", justifyContent: "flex-end" },
+                    children: [
+                      jsx("span", { className: "p1c-note p1c-sm", children: budgetText }),
+                      jsx(Btn, {
+                        variant: "quiet",
+                        disabled: budgetBusy || !(naparnik && naparnik.tokenSet),
+                        onClick: refreshBudget,
+                        children: budgetBusy ? "спрашиваю…" : "Проверить",
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-actions",
+                children: [
+                  jsx(Btn, {
+                    variant: "primary",
+                    disabled: tokenSaving || !token.trim(),
+                    onClick: saveToken,
+                    children: "Сохранить",
+                  }),
+                  jsx("span", {
+                    className: "p1c-note p1c-sm",
+                    children: "Токен хранится в общих настройках плагина, не в проекте.",
+                  }),
+                ],
+              }),
+              tokenNote ? jsx("div", { className: "p1c-note p1c-sm", children: tokenNote }) : null,
+            ],
+          }),
+          jsxs("div", {
+            className: "p1c-card",
+            children: [
+              jsx("div", { className: "p1c-card__title", children: "Наборы правил" }),
+              jsx("div", {
+                className: "p1c-stack p1c-stack--tight",
+                children: presets.map((preset) => {
+                  const isRenaming = renaming === preset.id;
+                  const isDeleting = deleting === preset.id;
+                  return jsxs(
+                    "div",
+                    {
+                      key: preset.id,
+                      className: "p1c-preset",
+                      children: [
+                        isRenaming
+                          ? jsx("input", {
+                              className: "p1c-input",
+                              style: { maxWidth: "260px" },
+                              value: renameDraft,
+                              autoFocus: true,
+                              onChange: (event) => setRenameDraft(event.target.value),
+                              onKeyDown: (event) => {
+                                if (event.key !== "Enter") return;
+                                act({ action: "rename", presetId: preset.id, name: renameDraft }).then((next) => {
+                                  if (next) setRenaming("");
+                                });
+                              },
+                            })
+                          : jsx("span", { className: "p1c-row__key", children: preset.name }),
+                        jsx("span", {
+                          className: "p1c-note p1c-sm",
+                          children:
+                            (preset.builtin ? "поставка" : "мой") +
+                            " · " +
+                            preset.enabled +
+                            " из " +
+                            total +
+                            " · " +
+                            preset.threshold,
+                        }),
+                        jsxs("span", {
+                          className: "p1c-preset__acts",
+                          children: [
+                            jsx(Btn, { variant: "quiet", disabled: busy, onClick: () => setRulesFor(preset.id), children: "Правила" }),
+                            preset.builtin
+                              ? null
+                              : jsx(Btn, {
+                                  disabled: busy,
+                                  onClick: () => {
+                                    setRenaming(preset.id);
+                                    setRenameDraft(preset.name);
+                                    setDeleting("");
+                                  },
+                                  children: "Переименовать",
+                                }),
+                            preset.builtin
+                              ? null
+                              : jsx(Btn, {
+                                  variant: "danger",
+                                  disabled: busy,
+                                  onClick: () => {
+                                    setDeleting(preset.id);
+                                    setRenaming("");
+                                  },
+                                  children: "Удалить",
+                                }),
+                          ],
+                        }),
+                        isDeleting
+                          ? jsxs("div", {
+                              className: "p1c-actions",
+                              children: [
+                                jsx("span", {
+                                  className: "p1c-note p1c-sm",
+                                  children: "Проекты, где он выбран, вернутся к поставке.",
+                                }),
+                                jsx(Btn, {
+                                  variant: "danger",
+                                  disabled: busy,
+                                  onClick: () =>
+                                    act({ action: "delete", presetId: preset.id }).then((next) => {
+                                      if (next) setDeleting("");
+                                    }),
+                                  children: "Удалить",
+                                }),
+                                jsx(Btn, { onClick: () => setDeleting(""), children: "Отмена" }),
+                              ],
+                            })
+                          : null,
+                      ],
+                    },
+                  );
+                }),
+              }),
+              jsxs("div", {
+                className: "p1c-actions",
+                children: [
+                  jsx("select", {
+                    className: "p1c-select",
+                    style: { flex: "0 1 220px", width: "auto", maxWidth: "260px" },
+                    value: newBase,
+                    disabled: busy,
+                    onChange: (event) => setNewBase(event.target.value),
+                    children: presets.map((preset) => jsx("option", { value: preset.id, children: "копия: " + preset.name })),
+                  }),
+                  jsx("input", {
+                    className: "p1c-input",
+                    style: { flex: "1 1 160px", minWidth: 0 },
+                    placeholder: "Название набора",
+                    value: newName,
+                    onChange: (event) => setNewName(event.target.value),
+                  }),
+                  jsx(Btn, {
+                    variant: "primary",
+                    disabled: busy || !newName.trim() || !newBase,
+                    onClick: () =>
+                      act({ action: "create", base: newBase, name: newName }).then((next) => {
+                        if (next) setNewName("");
+                      }),
+                    children: "Создать",
+                  }),
+                ],
+              }),
+              jsx("div", {
+                className: "p1c-note p1c-sm",
+                children: "Наборы поставки неизменяемы: правка создаёт ваш набор. Набор общий для машины.",
+              }),
+            ],
+          }),
+          error ? jsx("div", { className: "p1c-note p1c-note--warn", children: error }) : null,
+          rulesFor
+            ? jsx(ChecksRulesDialog, {
+                presetId: rulesFor,
+                onClose: () => setRulesFor(""),
+                onApplied: () => load().catch(() => {}),
+              })
+            : null,
+        ],
+      });
+    }
+
+    function ChecksRulesDialog(props) {
+      const [data, setData] = useState(null);
+      const [error, setError] = useState("");
+      const [query, setQuery] = useState("");
+      const [category, setCategory] = useState("Все правила");
+      const [selected, setSelected] = useState("");
+      const [on, setOn] = useState(new Set());
+      const [saving, setSaving] = useState(false);
+
+      useEffect(() => {
+        let alive = true;
+        const query = props.presetId
+          ? "presetId=" + encodeURIComponent(props.presetId)
+          : "project=" + encodeURIComponent(props.path);
+        request(CHECKS + "/rules?" + query)
+          .then((payload) => {
+            if (!alive) return;
+            setData(payload);
+            setOn(new Set(payload.rules.filter((rule) => rule.on).map((rule) => rule.code)));
+            setSelected(payload.rules.length ? payload.rules[0].code : "");
+          })
+          .catch((cause) => {
+            if (alive) setError(cause.message);
+          });
+        return () => {
+          alive = false;
+        };
+      }, [props.path, props.presetId]);
+
+      const rules = (data && data.rules) || [];
+      const categories = ["Все правила", ...Array.from(new Set(rules.map((rule) => rule.category)))];
+      const needle = query.trim().toLowerCase();
+      const visible = rules.filter(
+        (rule) =>
+          (category === "Все правила" || rule.category === category) &&
+          (!needle ||
+            rule.code.toLowerCase().includes(needle) ||
+            rule.name.toLowerCase().includes(needle) ||
+            (rule.description || "").toLowerCase().includes(needle)),
+      );
+      const current = rules.find((rule) => rule.code === selected) || null;
+
+      const toggleRule = (code) => {
+        const next = new Set(on);
+        if (next.has(code)) next.delete(code);
+        else next.add(code);
+        setOn(next);
+      };
+
+      const apply = async () => {
+        setSaving(true);
+        try {
+          const off = rules.filter((rule) => !on.has(rule.code)).map((rule) => rule.code);
+          const result = await request(CHECKS + "/preset", {
+            method: "POST",
+            body: JSON.stringify({
+              project: props.path || undefined,
+              presetId: data.presetId,
+              off,
+              threshold: data.threshold,
+            }),
+          });
+          if (props.onApplied) props.onApplied(result);
+          props.onClose();
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      const head = jsxs("div", {
+        className: "p1c-dialog__head",
+        children: [
+          jsxs("div", {
+            className: "p1c-dialog__headmain",
+            children: [
+              jsx("div", { className: "p1c-dialog__title", children: "Правила статического анализа" }),
+              jsx("div", { className: "p1c-dialog__path", children: data ? data.presetName : "читаю каталог…" }),
+            ],
+          }),
+          jsx(Btn, { onClick: props.onClose, children: "Закрыть" }),
+        ],
+      });
+
+      const severityTone = (value) => {
+        const text = String(value || "").toLowerCase();
+        if (text === "blocker" || text === "critical") return "p1c-text--err";
+        if (text === "major") return "p1c-text--warn";
+        return "";
+      };
+
+      const body = !data
+        ? jsx("div", { className: "p1c-dialog__body", children: jsx("div", { className: "p1c-note", children: error || "читаю каталог правил…" }) })
+        : jsxs("div", {
+            className: "p1c-dialog__body p1c-bsl-rules",
+            children: [
+              jsxs("div", {
+                className: "p1c-bsl-rules__col",
+                children: [
+                  jsx("div", { key: "head", className: "p1c-bsl-rules__meta", children: "Категории" }),
+                  jsx("div", {
+                    key: "list",
+                    className: "p1c-bsl-rules__scroll",
+                    children: categories.map((name) => {
+                      const list = name === "Все правила" ? rules : rules.filter((rule) => rule.category === name);
+                      const enabled = list.filter((rule) => on.has(rule.code)).length;
+                      return jsxs(
+                        "div",
+                        {
+                          key: name,
+                          className: cx("p1c-bsl-rules__row", category === name && "is-active"),
+                          title: name,
+                          onClick: () => setCategory(name),
+                          children: [
+                            jsx("span", { className: "p1c-bsl-rules__name", children: name }),
+                            jsx("span", { className: "p1c-bsl-rules__count", children: enabled + "/" + list.length }),
+                          ],
+                        },
+                      );
+                    }),
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-bsl-rules__col",
+                children: [
+                  jsx("input", {
+                    key: "search",
+                    className: "p1c-input",
+                    placeholder: "Поиск по названию, коду или описанию",
+                    value: query,
+                    onChange: (event) => setQuery(event.target.value),
+                  }),
+                  jsx("div", {
+                    key: "list",
+                    className: "p1c-bsl-rules__scroll",
+                    children: visible.length
+                      ? visible.map((rule) =>
+                          jsxs(
+                            "div",
+                            {
+                              key: rule.code,
+                              className: cx(
+                                "p1c-bsl-rules__row",
+                                rule.code === selected && "is-active",
+                                !on.has(rule.code) && "is-muted",
+                              ),
+                              title: rule.name,
+                              onClick: () => setSelected(rule.code),
+                              children: [
+                                jsx("input", {
+                                  type: "checkbox",
+                                  className: "p1c-check",
+                                  checked: on.has(rule.code),
+                                  onClick: (event) => event.stopPropagation(),
+                                  onChange: () => toggleRule(rule.code),
+                                }),
+                                jsx("span", { className: "p1c-bsl-rules__name", children: rule.name }),
+                                jsx("span", {
+                                  className: cx("p1c-bsl-rules__sev", severityTone(rule.severity)),
+                                  children: rule.severity,
+                                }),
+                              ],
+                            },
+                          ),
+                        )
+                      : jsx("div", { className: "p1c-bsl-rules__empty", children: "Ничего не найдено" }),
+                  }),
+                ],
+              }),
+              jsxs("div", {
+                className: "p1c-bsl-rules__col",
+                children: current
+                  ? [
+                      jsx("div", { key: "title", className: "p1c-bsl-rules__title", children: current.name }),
+                      jsx("div", {
+                        key: "meta",
+                        className: "p1c-bsl-rules__meta",
+                        children: current.code + " · " + current.severity + " · " + current.category,
+                      }),
+                      jsx("div", {
+                        key: "desc",
+                        className: "p1c-bsl-rules__scroll",
+                        children: jsx("div", {
+                          className: "p1c-bsl-rules__desc",
+                          children: current.description || "Описание не заполнено",
+                        }),
+                      }),
+                    ]
+                  : jsx("div", { className: "p1c-bsl-rules__empty", children: "Выберите правило" }),
+              }),
+            ],
+          });
+
+      const foot = jsxs("div", {
+        className: "p1c-dialog__foot",
+        children: [
+          jsx("div", {
+            className: "p1c-dialog__footleft",
+            children: jsx("span", {
+              className: "p1c-note",
+              children: data ? "Включено " + on.size + " из " + rules.length : "",
+            }),
+          }),
+          jsxs("div", {
+            className: "p1c-dialog__footright",
+            children: [
+              jsx(Btn, { onClick: props.onClose, children: "Отмена" }),
+              jsx(Btn, { variant: "primary", disabled: saving || !data, onClick: apply, children: "Применить" }),
+            ],
+          }),
+        ],
+      });
+
+      return portal(
+        jsx("div", {
+          className: "p1c-root p1c-overlay",
+          children: jsx("div", {
+            className: "p1c-dialog",
+            style: { width: "980px", maxWidth: "96vw" },
+            children: jsxs("div", { children: [head, body, foot, error ? jsx("div", { className: "p1c-note p1c-warn", children: error }) : null] }),
+          }),
+        }),
+      );
+    }
+
+    // Экран наборов правил: список, создать копию, переименовать, удалить.
+    // Удаление используемого набора откатывает проект на поставку — без
+    // подтверждающих окон, строка об этом говорит прямо.
+    // Плашка поверх окна: те же форма, цвет и время жизни, что у подсказок
+    // редактора, чтобы подтверждения в приложении выглядели одинаково.
+    let toastTimer = null;
+    function showToast(message) {
+      let host = document.querySelector(".p1c-toast");
+      if (!host) {
+        host = document.createElement("div");
+        host.className = "p1c-toast";
+        const pill = document.createElement("div");
+        pill.className = "p1c-toast__pill";
+        host.appendChild(pill);
+        document.body.appendChild(host);
+      }
+      const pill = host.firstChild;
+      if (pill) pill.textContent = String(message);
+      host.classList.remove("p1c-toast--leaving");
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        host.classList.add("p1c-toast--leaving");
+        toastTimer = setTimeout(() => {
+          if (host.parentNode) host.parentNode.removeChild(host);
+          toastTimer = null;
+        }, 220);
+      }, 2200);
+    }
+
+    // ── панель результатов в боковой колонке (better-sidebar) ───────────────
+    // Замечания запускает агент; панель показывает последний прогон и даёт
+    // принять или вернуть их мышью, без правки файлов руками.
+    function sidebarJoin(root, relative) {
+      const base = String(root || "").replace(/[\\/]+$/, "");
+      const tail = String(relative || "").replace(/\\/g, "/");
+      return base + "\\" + tail.replace(/\//g, "\\");
+    }
+
+    function SidebarChecksTab(props) {
+      const projectPath = (props.scope && props.scope.cwd) || "";
+      const [data, setData] = useState(null);
+      const [error, setError] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [manualPath, setManualPath] = useState("");
+      const [running, setRunning] = useState(false);
+      // Свёрнутые модули и режим показа пропущенного: пропущенное не должно
+      // занимать место, пока его не попросили вернуть.
+      const [collapsed, setCollapsed] = useState(new Set());
+      const [showSkipped, setShowSkipped] = useState(false);
+      // Панель открывается раньше настроек, поэтому стили нужны здесь же:
+      // иначе классы p1c-* не определены и текст слипается в кашу.
+      injectStyles();
+
+      const load = useCallback(async () => {
+        if (!projectPath) return null;
+        const payload = await request(CHECKS + "/panel?project=" + encodeURIComponent(projectPath));
+        setData(payload);
+        setError("");
+        return payload;
+      }, [projectPath]);
+
+      useEffect(() => {
+        let alive = true;
+        load().catch((cause) => {
+          if (alive) setError(cause.message);
+        });
+        return () => {
+          alive = false;
+        };
+      }, [load]);
+
+      const acceptFile = async (file) => {
+        setBusy(true);
+        try {
+          await request(CHECKS + "/accept", {
+            method: "POST",
+            body: JSON.stringify({ project: projectPath, findings: file.findings, by: "user" }),
+          });
+          await load();
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      // Открыть место замечания: сначала событие для нашего редактора (он умеет
+      // вставать на строку), затем обычное открытие файла хостом — на случай,
+      // если редактор не перехватывает открытия.
+      // Редактор и сайдбар считают путь от корня проекта. Абсолютный путь
+      // сюда приходит только если выгрузка лежит вне проекта.
+      const relativeToProject = (absolute) => {
+        const base = String(projectPath || "").replace(/\\/g, "/").replace(/\/+$/, "");
+        const full = String(absolute || "").replace(/\\/g, "/");
+        if (!base) return "";
+        if (full.toLowerCase().startsWith(base.toLowerCase() + "/")) return full.slice(base.length + 1);
+        return "";
+      };
+
+      const openAt = (absolute, line, column) => {
+        if (!absolute) return;
+        const target = relativeToProject(absolute) || absolute;
+        try {
+          window.dispatchEvent(
+            new CustomEvent("dsh-bsl-open-at", {
+              detail: { path: target, cwd: projectPath, line: line || undefined, column: column || undefined },
+            }),
+          );
+        } catch {}
+        // Запасной путь — обычное открытие файла: хвост «:строка» понимает не
+        // каждый обработчик, а путь с ним он может не найти.
+        if (props.onOpenFile) props.onOpenFile(target);
+      };
+
+      const toggleFold = (path) => {
+        setCollapsed((current) => {
+          const next = new Set(current);
+          if (next.has(path)) next.delete(path);
+          else next.add(path);
+          return next;
+        });
+      };
+
+      // Пропуск одного замечания: пропускается ровно эта находка, а не весь модуль.
+      const skipOne = async (file, finding, restore = false) => {
+        setBusy(true);
+        try {
+          await request(CHECKS + "/accept", {
+            method: "POST",
+            body: JSON.stringify(
+              restore
+                ? { project: projectPath, restore: true, keys: [finding.key] }
+                : { project: projectPath, findings: [{ ...finding, path: file.path }], by: "user" },
+            ),
+          });
+          await load();
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const restoreAll = async () => {
+        setBusy(true);
+        try {
+          await request(CHECKS + "/accept", {
+            method: "POST",
+            body: JSON.stringify({ project: projectPath, all: true, restore: true }),
+          });
+          await load();
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      // Ручной запуск: файл или папка относительно выгрузки. Папку раскрывает
+      // хост, поэтому в поле можно указать «CommonModules» целиком.
+      const runCheck = async () => {
+        const wanted = manualPath.trim();
+        if (!wanted) return;
+        setRunning(true);
+        try {
+          const result = await request(CHECKS + "/check", {
+            method: "POST",
+            body: JSON.stringify({ project: projectPath, files: [wanted], by: "user" }),
+          });
+          setData((current) => ({ ...(current || {}), last: result }));
+          setError("");
+        } catch (cause) {
+          setError(cause.message);
+        } finally {
+          setRunning(false);
+        }
+      };
+
+      // Текст для агента: шапка с контекстом, дальше по файлам полные адреса
+      // «строка:колонка код (важность) — сообщение». Копия в буфер, чтобы
+      // вставить в чат вместе со ссылкой на файл.
+      const copyFindings = async () => {
+        const last = data && data.last;
+        if (!last) return;
+        const groups = [];
+        let total = 0;
+        for (const file of last.files || []) {
+          const rows = (file.findings || []).filter((finding) => !finding.accepted);
+          if (!rows.length) continue;
+          total += rows.length;
+          groups.push(
+            [
+              file.path,
+              ...rows.map(
+                (finding) =>
+                  "  " +
+                  finding.line +
+                  ":" +
+                  finding.column +
+                  "  " +
+                  finding.code +
+                  " (" +
+                  finding.severity +
+                  ") — " +
+                  finding.message,
+              ),
+            ].join("\n"),
+          );
+        }
+        if (!total) return;
+        const head =
+          "Статический анализ, набор «" +
+          (data.presetName || "") +
+          "», прогон " +
+          new Date(last.checkedAt).toLocaleString("ru-RU") +
+          ". Замечаний: " +
+          total +
+          " в " +
+          groups.length +
+          " файл(ах). Пути от каталога выгрузки " +
+          (last.dumpDir || "") +
+          ":";
+        try {
+          await navigator.clipboard.writeText([head, "", ...groups].join("\n\n"));
+          setError("");
+          showToast(
+            "Скопировано: " + total + " " + plural(total, ["замечание", "замечания", "замечаний"]),
+          );
+        } catch {
+          setError("буфер обмена недоступен");
+          showToast("Буфер обмена недоступен");
+        }
+      };
+
+      const shell = (children) =>
+        jsxs("div", { className: "p1c-root p1c-root--panel p1c-stack", style: { padding: "10px" }, children });
+
+      if (!projectPath) return shell([jsx("div", { className: "p1c-note", children: "Проект не определён" })]);
+      if (!data) return shell([jsx("div", { className: "p1c-note", children: error || "читаю…" })]);
+      if (!data.enabled) {
+        return shell([jsx("div", { className: "p1c-note", children: "Статический анализ выключен в параметрах проекта" })]);
+      }
+
+      const manualBlock = jsxs("div", {
+        className: "p1c-stack p1c-stack--tight",
+        children: [
+          jsxs("div", {
+            className: "p1c-actions",
+            children: [
+              jsx("input", {
+                className: "p1c-input",
+                placeholder: "CommonModules/ОбщегоНазначения/Ext/Module.bsl",
+                title: "Путь относительно каталога выгрузки. Можно указать папку — она раскроется в модули .bsl.",
+                value: manualPath,
+                onChange: (event) => setManualPath(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === "Enter") runCheck();
+                },
+              }),
+              jsx(Btn, {
+                variant: "primary",
+                disabled: running || !manualPath.trim(),
+                onClick: runCheck,
+                children: running ? "Проверяю…" : "Проверить",
+              }),
+            ],
+          }),
+          jsx("div", {
+            className: "p1c-note p1c-sm",
+            children: "Путь от каталога выгрузки: модуль или папка. Замечания попадут сюда и станут доступны агенту.",
+          }),
+        ],
+      });
+
+      const last = data.last;
+      if (!last) {
+        return shell([
+          manualBlock,
+          jsx("div", {
+            className: "p1c-note",
+            children: "Проверок ещё не было. Укажите файл или папку выше либо попросите агента проверить файл.",
+          }),
+        ]);
+      }
+
+      const blocks = last.files.map((file) => {
+        const open = file.findings.filter((finding) => !finding.accepted);
+        const skipped = file.findings.length - open.length;
+        const shown = showSkipped ? file.findings : open;
+        const folded = collapsed.has(file.path);
+        const absolute = sidebarJoin(last.dumpDir, file.path);
+        return jsxs(
+          "div",
+          {
+            key: file.path,
+            className: "p1c-card",
+            children: [
+              jsxs("button", {
+                type: "button",
+                className: "p1c-filehead",
+                title: folded ? "Развернуть замечания" : "Свернуть замечания",
+                onClick: () => toggleFold(file.path),
+                children: [
+                  jsx("svg", {
+                    className: "p1c-chevron" + (folded ? " p1c-chevron--folded" : ""),
+                    width: 12,
+                    height: 12,
+                    viewBox: "0 0 12 12",
+                    "aria-hidden": "true",
+                    children: jsx("path", {
+                      d: "M2.5 4.5L6 8L9.5 4.5",
+                      fill: "none",
+                      stroke: "currentColor",
+                      strokeWidth: "1.7",
+                      strokeLinecap: "round",
+                      strokeLinejoin: "round",
+                    }),
+                  }),
+                  jsx("span", { className: "p1c-path p1c-mono p1c-sm", children: file.path }),
+                  jsx("span", {
+                    className: "p1c-filehead__count",
+                    children: open.length
+                      ? open.length + " " + plural(open.length, ["замечание", "замечания", "замечаний"])
+                      : skipped
+                        ? "всё пропущено"
+                        : "чисто",
+                  }),
+                ],
+              }),
+              folded || !shown.length
+                ? null
+                : jsx("div", {
+                    className: "p1c-stack p1c-stack--tight",
+                    children: shown.map((finding) =>
+                      jsxs(
+                        "div",
+                        {
+                          key: finding.key || finding.code + finding.line,
+                          className: "p1c-finding" + (finding.accepted ? " p1c-finding--skipped" : ""),
+                          children: [
+                            jsxs("div", {
+                              className: "p1c-finding__head",
+                              children: [
+                                jsx("span", { className: "p1c-finding__pos p1c-mono", children: finding.line + ":" + finding.column }),
+                                jsx("span", {
+                                  className: "p1c-sev p1c-sev--" + String(finding.severity || "").toLowerCase(),
+                                  children: finding.severity,
+                                }),
+
+                                jsxs("span", {
+                                  className: "p1c-finding__acts",
+                                  children: [
+                                    jsx("button", {
+                                      type: "button",
+                                      className: "p1c-linkbtn",
+                                      onClick: () => openAt(absolute, finding.line, finding.column),
+                                      children: "Перейти",
+                                    }),
+                                    finding.accepted
+                                      ? jsx("button", {
+                                          type: "button",
+                                          className: "p1c-finding__skip",
+                                          title: "Вернуть замечание в работу",
+                                          disabled: busy,
+                                          onClick: () => skipOne(file, finding, true),
+                                          children: "Вернуть",
+                                        })
+                                      : jsx("button", {
+                                          type: "button",
+                                          className: "p1c-finding__skip",
+                                          title: "Пропустить это замечание: скрыть, править не будем",
+                                          disabled: busy,
+                                          onClick: () => skipOne(file, finding, false),
+                                          children: "Пропустить",
+                                        }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                            jsx("div", { className: "p1c-finding__msg", children: finding.message }),
+                            jsx("div", { className: "p1c-finding__code p1c-mono", children: finding.code }),
+                          ],
+                        },
+                      ),
+                    ),
+                  }),
+              jsxs("div", {
+                className: "p1c-actions",
+                children: [
+                  props.onReferenceFile
+                    ? jsx(Btn, {
+                        onClick: () => props.onReferenceFile(absolute, false),
+                        children: "Ссылка на модуль в чат",
+                      })
+                    : null,
+                  open.length
+                    ? jsx(Btn, {
+                        disabled: busy,
+                        onClick: () => acceptFile({ ...file, findings: open }),
+                        title: "Пропустить все замечания этого модуля",
+                        children: "Пропустить все",
+                      })
+                    : null,
+                ],
+              }),
+            ],
+          },
+        );
+      });
+
+      const totalOpen = last.files.reduce(
+        (sum, file) => sum + file.findings.filter((finding) => !finding.accepted).length,
+        0,
+      );
+
+      return shell([
+        manualBlock,
+        last.metadata && last.metadata.symbolsAvailable === false
+          ? jsx("div", { className: "p1c-note p1c-note--warn", children: last.metadata.note })
+          : null,
+        jsxs("div", {
+          className: "p1c-panelhead",
+          children: [
+            jsx("span", {
+              className: "p1c-panelhead__meta",
+              children:
+                "Проверка " +
+                new Date(last.checkedAt).toLocaleString("ru-RU") +
+                " · " +
+                totalOpen +
+                " " +
+                plural(totalOpen, ["замечание", "замечания", "замечаний"]),
+            }),
+            data.accepted
+              ? jsx("button", {
+                  type: "button",
+                  className: "p1c-linkbtn",
+                  onClick: () => setShowSkipped((current) => !current),
+                  children: showSkipped ? "Скрыть пропущенные" : "Показать пропущенные (" + data.accepted + ")",
+                })
+              : null,
+          ],
+        }),
+        ...blocks,
+        jsxs("div", {
+          className: "p1c-actions",
+          children: [
+            jsx(Btn, { disabled: busy || !totalOpen, onClick: copyFindings, children: "Замечания в буфер" }),
+            data.accepted
+              ? jsx(Btn, {
+                  disabled: busy,
+                  onClick: restoreAll,
+                  title: "Вернуть все пропущенные в работу",
+                  children: "Вернуть все",
+                })
+              : null,
+          ],
+        }),
+        error ? jsx("div", { className: "p1c-note p1c-note--warn", children: error }) : null,
+      ]);
+    }
+
+    function installSidebarTab(ctx) {
+      if (typeof ctx.inject !== "function") return;
+      ctx.inject(["betterSidebar"], (bctx) => {
+        const service =
+          (bctx && bctx.betterSidebar) || (typeof bctx.get === "function" ? bctx.get("betterSidebar") : null);
+        if (!service || typeof service.registerTab !== "function") return;
+        return service.registerTab({
+          id: "1c-bsl-checks",
+          title: "Анализ кода 1С",
+          description: "Замечания анализатора по файлам, которые проверял агент",
+          order: 120,
+          single: true,
+          component: SidebarChecksTab,
+        });
+      });
+    }
 
     function Card(props) {
       return jsxs("section", {
@@ -820,9 +2223,46 @@ window.__ModuleLoader__.load({
     // база, платформа, правила, выгрузка. Обычный проект закрывает визард на
     // первом шаге, и в его папке ничего не появляется.
 
-    const WIZARD_STEPS = 5;
     const WIZARD_PLATFORM_LIST = "dsh-1cprops-wizard-platforms";
     const WIZARD_INFOBASE_LIST = "dsh-1cprops-wizard-infobases";
+
+    /** Наличие payload comol в состоянии хоста и подписи. */
+    function readRulesets(state) {
+      const pack = (state && state.rulesPayloads) || {};
+      const payload = pack.comol || (state && state.rulesPayload) || null;
+      return [
+        {
+          id: "comol",
+          title: pack.title || "Правила comol",
+          hint:
+            pack.hint ||
+            "Правила, роли субагентов, команды, навыки и OpenSpec — нужны MCP-серверы comol.",
+          repo: pack.repo || "https://github.com/comol/ai_rules_1c",
+          payloadDir: "1c-rules",
+          available: Boolean(payload && payload.ok),
+          root: (payload && payload.root) || "",
+        },
+      ];
+    }
+
+    /** Флажок «добавить comol»: наши правила разворачиваются всегда. */
+    function RulesetPicker(props) {
+      const set = (props.sets || [])[0] || null;
+      const available = Boolean(set && set.available);
+      return jsxs("div", {
+        className: "p1c-radio",
+        children: [
+          jsx(Check, {
+            checked: props.value === "comol",
+            disabled: props.disabled || !available,
+            title: available ? set.hint : "Набор comol не найден в DSH" + (set && set.root ? ": " + set.root : ""),
+            onChange: (event) => props.onChange(event.target.checked && set ? "comol" : ""),
+            children: "Добавить правила comol",
+          }),
+          jsx("span", { className: "p1c-radio__hint", children: available ? set.hint : "Набор comol не найден в DSH" }),
+        ],
+      });
+    }
     const WIZARD_HOOK = "__dsh1cProjectWizard";
 
     let wizardRequest = null;
@@ -1001,6 +2441,7 @@ window.__ModuleLoader__.load({
       });
     }
 
+
     function Wizard(props) {
       const { request: target, onClose } = props;
       const [state, setState] = useState(null);
@@ -1027,7 +2468,6 @@ window.__ModuleLoader__.load({
       const [lastSaved, setLastSaved] = useState(
         JSON.stringify({ ...EMPTY_FORM, ...((target.detect && target.detect.params) || {}) }),
       );
-
       injectStyles();
 
       useEffect(() => {
@@ -1141,6 +2581,7 @@ window.__ModuleLoader__.load({
         }
       };
 
+      // Развёртывание правил: наш слой всегда, comol — если стоит флажок.
       const deployRules = async () => {
         setBusy(true);
         setStatus(null);
@@ -1149,6 +2590,7 @@ window.__ModuleLoader__.load({
             method: "POST",
             body: JSON.stringify({
               path: target.path,
+              withComol: rulesOptions.base === "comol",
               includePassword: rulesOptions.includePassword,
               useEdt: rulesOptions.useEdt,
             }),
@@ -1246,8 +2688,11 @@ window.__ModuleLoader__.load({
       const platforms = (state && state.platforms) || [];
       const infoBases = (state && state.infobases) || [];
       const commonPlatform = (state && state.common && state.common.platformPath) || "";
-      const rulesPayload = (state && state.rulesPayload) || null;
-      const rulesPayloadOk = Boolean(rulesPayload && rulesPayload.ok);
+      const rulesets = readRulesets(state);
+      const rulesBase = rulesOptions.base;
+      const rulesSet = rulesets[0] || null;
+      // Наш слой не зависит от payload'а: кнопка доступна всегда.
+      const rulesReady = true;
       const canRun = Boolean(form.infobasePath) && baseSaved;
 
       const statusLine = status
@@ -1450,50 +2895,61 @@ window.__ModuleLoader__.load({
       });
 
       const stepRules = jsx(Card, {
-        title: "Навыки для работы агента с 1С",
+        title: "Правила 1С в проекте",
         hint: jsxs("span", {
           children: [
-            "Набор ",
-            jsx("a", { className: "p1c-link", href: RULES_REPO, target: "_blank", rel: "noreferrer", children: "1c-rules" }),
-            " — правила, навыки и команды. Разворачивается в проект: .dsh/skills и AGENTS.md.",
+            "Наши правила и плейбуки разворачиваются всегда. Дерево ",
+            jsx("a", {
+              className: "p1c-link",
+              href: (rulesSet && rulesSet.repo) || RULES_REPO,
+              target: "_blank",
+              rel: "noreferrer",
+              children: "comol",
+            }),
+            " можно добавить к ним флажком.",
           ],
         }),
         children: jsxs("div", {
           className: "p1c-stack",
           children: [
-            rulesPayloadOk
+            jsx(RulesetPicker, {
+              sets: rulesets,
+              value: rulesBase,
+              disabled: busy,
+              onChange: (id) => setRulesOptions((options) => ({ ...options, base: id })),
+            }),
+            rulesSet && rulesSet.available
               ? null
               : jsx("div", {
-                  className: "p1c-note p1c-note--warn",
-                  children:
-                    "Набор «1c-rules» в DSH не найден: " +
-                    ((rulesPayload && rulesPayload.root) || "$DSH_HOME/1c-rules") +
-                    ". Его кладёт DSH Desktop при первом запуске.",
+                  className: "p1c-note",
+                  children: "Правила comol не найдены в DSH — развернутся только наши правила.",
                 }),
-            jsxs("div", {
-              className: "p1c-options",
-              children: [
-                jsx(Check, {
-                  checked: rulesOptions.useEdt,
-                  disabled: busy || !rulesPayloadOk,
-                  onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
-                  title: "В EDT другой набор исходников — ссылки в правилах переписываются под его структуру",
-                  children: "проект ведётся в 1С:EDT (другая структура исходников)",
-                }),
-                jsx(Check, {
-                  checked: rulesOptions.includePassword,
-                  disabled: busy || !rulesPayloadOk,
-                  title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
-                  onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
-                  children: "записать пароль базы в .dev.env",
-                }),
-              ],
-            }),
+            rulesBase === "comol"
+              ? jsxs("div", {
+                  className: "p1c-options",
+                  children: [
+                    jsx(Check, {
+                      checked: rulesOptions.useEdt,
+                      disabled: busy,
+                      onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
+                      title: "В EDT другой набор исходников — ссылки в правилах переписываются под его структуру",
+                      children: "проект ведётся в 1С:EDT (другая структура исходников)",
+                    }),
+                    jsx(Check, {
+                      checked: rulesOptions.includePassword,
+                      disabled: busy,
+                      title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
+                      onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
+                      children: "записать пароль базы в .dev.env",
+                    }),
+                  ],
+                })
+              : null,
             jsx("div", {
               className: "p1c-actions",
               children: jsx(Btn, {
                 variant: "primary",
-                disabled: busy || !rulesPayloadOk,
+                disabled: busy,
                 onClick: deployRules,
                 children: "Развернуть правила",
               }),
@@ -1641,7 +3097,7 @@ window.__ModuleLoader__.load({
 
       const effectivePlatform = form.platformPath || commonPlatform;
       const rulesSummary = rulesResult && rulesResult.ok
-        ? "развёрнуты"
+        ? "развёрнуты: " + ((rulesSet && rulesSet.title) || rulesBase)
         : detect && detect.hasRules
           ? "уже были в проекте"
           : "не развёрнуты";
@@ -1728,8 +3184,13 @@ window.__ModuleLoader__.load({
         ],
       });
 
-      const bodyByStep = [stepKind, stepBase, stepRules, stepDump, stepDone];
-      const stepNames = ["Проект 1С", "База и платформа", "Навыки", "Выгрузка", "Готово"];
+      // Проверки кода — отдельный шаг: включение это решение, а не деталь
+      // выгрузки, и по умолчанию оно не запускает ни одной проверки.
+      const stepChecks = jsx(ChecksCard, { path: target.path });
+
+      const bodyByStep = [stepKind, stepBase, stepRules, stepDump, stepChecks, stepDone];
+      const stepNames = ["Проект 1С", "База и платформа", "Навыки", "Выгрузка", "Анализ кода 1С", "Готово"];
+      const WIZARD_STEPS = bodyByStep.length;
 
       const stepsBar = jsx("div", {
         className: "p1c-steps",
@@ -1772,6 +3233,9 @@ window.__ModuleLoader__.load({
             onClick: leaveDump,
             children: "Далее",
           });
+        }
+        if (step === 4) {
+          return jsx(Btn, { variant: "primary", onClick: () => setStep(5), children: "Далее" });
         }
         return jsx(Btn, { variant: "primary", disabled: busy, onClick: finishWizard, children: "Готово" });
       })();
@@ -1842,7 +3306,10 @@ window.__ModuleLoader__.load({
         platformPlaceholder,
         infoBases,
         platforms,
-        rulesPayload,
+        rulesets,
+        rulesSelected,
+        rulesDeployed,
+        onRulesSelect,
         rulesResult,
         rulesOptions,
         setRulesOptions,
@@ -1897,57 +3364,29 @@ window.__ModuleLoader__.load({
         : null;
 
       // ── блок правил 1С ─────────────────────────────────────────────────────
-      const rulesPayloadOk = Boolean(rulesPayload && rulesPayload.ok);
-      const rulesPayloadRoot = rulesPayload && rulesPayload.root ? rulesPayload.root : "$DSH_HOME/1c-rules";
-      const rulesResultSummary = rulesResult && rulesResult.summary
-        ? Object.entries(RESULT_LABEL)
-            .filter(([key]) => Number(rulesResult.summary[key]) > 0)
-            .map(([key, label]) => label + ": " + rulesResult.summary[key])
-            .join(" · ")
+      // Подпись кнопки зависит от того, что уже лежит в проекте: набора нет —
+      // «Развернуть», тот же набор — «Обновить», другой — «Сменить набор…».
+      const rulesDeployedFlag = Boolean(rulesDeployed && rulesDeployed.deployed);
+      const deployedWithComol = Boolean(rulesDeployedFlag && rulesDeployed.withComol);
+      const rulesActionLabel = !rulesDeployedFlag
+        ? "Развернуть"
+        : deployedWithComol === (rulesSelected === "comol")
+          ? "Обновить"
+          : "Применить";
+      const rulesActionTitle = !rulesDeployedFlag
+        ? "Разложить наши правила в проект"
+        : "Обновить файлы правил";
+      const deployedLine = rulesDeployedFlag
+        ? "Развёрнуто: наши правила" + (deployedWithComol ? " + comol" : "")
         : "";
 
       const rulesResultBlock = rulesResult
-        ? jsxs("div", {
-            className: "p1c-stack p1c-stack--tight",
+        ? jsxs("details", {
+            className: "p1c-details",
+            open: true,
             children: [
-              jsx("div", {
-                className: cx("p1c-sm p1c-strong", rulesResult.ok === false && "p1c-text--err"),
-                children: rulesResult.ok === false
-                  ? "Развернуть не удалось"
-                  : rulesResult.dryRun ? "Предпросмотр (ничего не записано)" : "Развёртывание выполнено",
-              }),
-              rulesResult.ok === false
-                ? jsx("div", {
-                    className: "p1c-note p1c-note--err",
-                    children: String(rulesResult.error || "причина не сообщена"),
-                  })
-                : jsx("div", { className: "p1c-note", children: rulesResultSummary || "изменений нет" }),
-              ...(rulesResult.notes || []).map((note, index) =>
-                jsx("div", { key: "n" + index, className: "p1c-note", children: note }),
-              ),
-              ...(rulesResult.warnings || []).map((warning, index) =>
-                jsx("div", { key: "w" + index, className: "p1c-note p1c-note--warn", children: warning }),
-              ),
-              ...(() => {
-                const preserved = (rulesResult.files || []).filter((file) => file.status === "preserved");
-                if (preserved.length === 0) return [];
-                const shown = preserved.slice(0, 3);
-                return [
-                  jsxs("div", {
-                    key: "preserved",
-                    className: "p1c-note",
-                    children: [
-                      jsx("div", { children: "Оставлено ваше (" + preserved.length + "):" }),
-                      ...shown.map((file, index) =>
-                        jsx("div", { key: index, className: "p1c-mono", children: file.path + (file.detail ? " — " + file.detail : "") }),
-                      ),
-                      preserved.length > shown.length
-                        ? jsx("div", { children: "и ещё " + (preserved.length - shown.length) })
-                        : null,
-                    ],
-                  }),
-                ];
-              })(),
+              jsx(Summary, { children: "Результат последнего запуска" }),
+              jsx("div", { className: "p1c-details__body", children: jsx(RulesReport, { result: rulesResult }) }),
             ],
           })
         : null;
@@ -1982,7 +3421,7 @@ window.__ModuleLoader__.load({
                 ],
               }),
               jsxs("div", {
-                className: "p1c-dialog__body",
+                className: "p1c-dialog__body p1c-dialog__body--project",
                 children: [
                   jsx(Card, {
                     title: "Подключение",
@@ -2205,72 +3644,54 @@ window.__ModuleLoader__.load({
 
                   jsx(Card, {
                     title: "Правила 1С в проекте",
-                    hint: jsxs("span", {
-                      children: [
-                        "Набор ",
-                        jsx("a", { className: "p1c-link", href: RULES_REPO, target: "_blank", rel: "noreferrer", children: "1c-rules" }),
-                        " раскладывается в проект: .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, .dsh/skills и AGENTS.md в корне.",
-                      ],
-                    }),
                     children: jsxs("div", {
                       className: "p1c-stack",
                       children: [
-                        rulesPayloadOk
-                          ? null
-                          : jsx("div", {
-                              className: "p1c-note p1c-note--warn",
-                              children: "Набор «1c-rules» в DSH не найден: " + rulesPayloadRoot +
-                                ". Его кладёт DSH Desktop при первом запуске; в standalone-установке положите набор в этот каталог вручную.",
-                            }),
-                        jsxs("div", {
-                          className: "p1c-options",
-                          children: [
-                            jsx(Check, {
-                              checked: rulesOptions.useEdt,
-                              disabled: busy || !rulesPayloadOk,
-                              onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
-                              children: "в проекте используется 1С:EDT",
-                            }),
-                            jsx(Check, {
-                              checked: rulesOptions.includePassword,
-                              disabled: busy || !rulesPayloadOk,
-                              title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
-                              onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
-                              children: "записать пароль базы в .dev.env",
-                            }),
-                          ],
+                        jsx(RulesetPicker, {
+                          sets: rulesets,
+                          value: rulesSelected,
+                          disabled: busy,
+                          onChange: onRulesSelect,
                         }),
-                        jsx("div", {
-                          className: "p1c-actions",
-                          children: jsx(Btn, {
-                            variant: "primary",
-                            disabled: busy || !rulesPayloadOk,
-                            title: rulesPayloadOk
-                              ? "Разложить набор правил в проект: .dsh/rules-1c, .dsh/agents-1c, .dsh/commands-1c, .dsh/skills, AGENTS.md"
-                              : "Набор правил не найден в DSH: " + rulesPayloadRoot,
-                            onClick: () => onRulesDeploy(false),
-                            children: "Развернуть",
-                          }),
-                        }),
-                        jsx("div", {
-                          className: "p1c-note",
-                          children: "Существующий AGENTS.md не затирается: он сохраняется как AGENTS.md.bak.md и вклеивается в USER-RULES.md; " +
-                            "файлы с вашими правками при обновлении не перезаписываются, .dev.env и openspec/ создаются один раз.",
-                        }),
-                        rulesResultBlock
-                          ? jsxs("details", {
-                              className: "p1c-details",
-                              open: true,
+                        rulesSelected === "comol"
+                          ? jsxs("div", {
+                              className: "p1c-options",
                               children: [
-                                jsx(Summary, { children: "Результат последнего запуска" }),
-                                jsx("div", { className: "p1c-details__body", children: rulesResultBlock }),
+                                jsx(Check, {
+                                  checked: rulesOptions.useEdt,
+                                  disabled: busy,
+                                  onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
+                                  children: "в проекте используется 1С:EDT",
+                                }),
+                                jsx(Check, {
+                                  checked: rulesOptions.includePassword,
+                                  disabled: busy,
+                                  title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
+                                  onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
+                                  children: "записать пароль базы в .dev.env",
+                                }),
                               ],
                             })
                           : null,
+                        jsxs("div", {
+                          className: "p1c-actions",
+                          children: [
+                            jsx(Btn, {
+                              variant: "primary",
+                              disabled: busy,
+                              title: rulesActionTitle,
+                              onClick: onRulesDeploy,
+                              children: rulesActionLabel,
+                            }),
+                            jsx("span", { className: "p1c-note", children: deployedLine }),
+                          ],
+                        }),
+                        rulesResultBlock,
                       ],
                     }),
                   }),
                   jsx(RlmIndexCard, { path: project.path }),
+                  jsx(ChecksCard, { path: project.path }),
                 ],
               }),
               jsxs("div", {
@@ -2544,24 +3965,43 @@ window.__ModuleLoader__.load({
       // ── правила 1С в проекте ───────────────────────────────────────────────
       useEffect(() => {
         setRulesResult(null);
+        setRulesOptions({ ...EMPTY_RULES_OPTIONS });
       }, [openPath]);
 
-      const deployRulesTo = () =>
-        run(async () => {
-          const body = {
-            path: project.path,
-            includePassword: rulesOptions.includePassword,
-            useEdt: rulesOptions.useEdt,
-          };
-          try {
-            setRulesResult(await request("/rules-deploy", { method: "POST", body: JSON.stringify(body) }));
-          } catch (error) {
-            // Отказ хоста (нет набора, нет прав) — это результат операции, а не
-            // молчание: показываем его в карточке правил.
-            setRulesResult({ ok: false, error: String((error && error.message) || error) });
-            throw error;
+      const rulesSets = readRulesets(state);
+      const rulesDeployed = project && project.rules ? project.rules : null;
+      const rulesDeployedWithComol = Boolean(
+        rulesDeployed && rulesDeployed.deployed && rulesDeployed.withComol,
+      );
+      const rulesSelected = rulesOptions.base || (rulesDeployedWithComol ? "comol" : "");
+
+      /** Разложить наши правила и, если стоит флажок, дерево comol. */
+      const deployRulesTo = async () => {
+        if (!project) return;
+        setBusy(true);
+        try {
+          const result = await request("/rules-deploy", {
+            method: "POST",
+            body: JSON.stringify({
+              path: project.path,
+              withComol: rulesSelected === "comol",
+              includePassword: rulesOptions.includePassword,
+              useEdt: rulesOptions.useEdt,
+            }),
+          });
+          setRulesResult(result);
+          if (result && result.ok === true) {
+            setStatus({ kind: "ok", text: "Правила развёрнуты в проект" });
+            await load();
           }
-        }, "Правила развёрнуты в проект");
+        } catch (error) {
+          setRulesResult({ ok: false, error: String((error && error.message) || error) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const requestRulesDeploy = () => deployRulesTo();
 
       if (state === null) {
         return jsx("div", { className: "p1c-root", children: jsx("div", { className: "p1c-note", children: status ? status.text : "Загрузка параметров…" }) });
@@ -2682,11 +4122,14 @@ window.__ModuleLoader__.load({
             platformPlaceholder,
             infoBases,
             platforms,
-            rulesPayload: state.rulesPayload || null,
+            rulesets: rulesSets,
+            rulesSelected,
+            rulesDeployed,
+            onRulesSelect: (id) => setRulesOptions((options) => ({ ...options, base: id })),
             rulesResult,
             rulesOptions,
             setRulesOptions,
-            onRulesDeploy: deployRulesTo,
+            onRulesDeploy: requestRulesDeploy,
             onSave: saveProject,
             onClear: clearProject,
             onForget: forgetProject,
@@ -3036,7 +4479,7 @@ window.__ModuleLoader__.load({
             }),
             jsx("button", { type: "button", style: rlmStyles.primaryButton, disabled: busy || !dirty, onClick: savePort, children: "Сохранить" }),
           ]}),
-          jsx("div", { style: rlmStyles.hint, children: "Порт попадает в URL сервера — после смены перезапустите сервер и обновите его в MCP-менеджере." }),
+          jsx("div", { style: rlmStyles.hint, children: "После смены порта перезапустите сервер." }),
         ]}),
         jsxs("div", { style: rlmStyles.card, children: [
           jsxs("div", { style: rlmStyles.row, children: [
@@ -3064,7 +4507,7 @@ window.__ModuleLoader__.load({
               },
             }),
           ]}),
-          jsx("div", { style: rlmStyles.hint, children: "Предел, после которого прогон останавливается. Проверка при этом не показывает ошибку: карточка говорит «состав файлов не проверен», сборка и обновление остаются доступны." }),
+          jsx("div", { style: rlmStyles.hint, children: "Предел прогона. Достигнут — карточка скажет «состав файлов не проверен»." }),
         ]}),
         jsxs("div", { style: rlmStyles.card, children: [
           jsxs("div", { style: rlmStyles.row, children: [
@@ -3082,7 +4525,7 @@ window.__ModuleLoader__.load({
                   ? item.manager + ": ошибка записи — " + item.error
                   : item.manager + ": " + (item.action === "added" ? "добавлено" : item.action === "updated" ? "обновлено" : "уже прописано") + " (" + item.file + ")",
               })),
-            jsx("div", { style: rlmStyles.hint, children: "Запись в менеджер MCP плагин ведёт сам; для менеджеров, которых он не знает, добавьте JSON через их UI. Инструменты: mcp__" + state.mcp.serverName + "__rlm_start … mcp__" + state.mcp.serverName + "__rlm_end." }),
+            jsx("div", { style: rlmStyles.hint, children: "Сервер прописывается в менеджер сам. Если вашего менеджера нет в списке — добавьте JSON вручную." }),
           ]}),
         ]}),
       ]});
@@ -3115,6 +4558,20 @@ window.__ModuleLoader__.load({
           RlmSection,
         ),
       );
+      // Анализ кода — своя вкладка настроек: движок, наборы правил и состояние
+      // по проектам. В параметрах проекта остались включение и выбор набора.
+      ctx.slots.inject("settings.section", () =>
+        ctx.slots.register(
+          {
+            name: "settings.section",
+            id: "1c-bsl-checks",
+            order: 57,
+            label: () => "1С: Анализ кода",
+            registrant: "dsh-1c-project-properties",
+          },
+          ChecksSection,
+        ),
+      );
       // Визард живёт в общем слое поверх приложения: он показывается сразу после
       // добавления проекта, а не внутри панели настроек.
       ctx.slots.inject("shell.overlay", () =>
@@ -3124,6 +4581,7 @@ window.__ModuleLoader__.load({
         ),
       );
       installCreateHook(ctx);
+      installSidebarTab(ctx);
     }
 
     return { apply, inject: ["slots"] };
