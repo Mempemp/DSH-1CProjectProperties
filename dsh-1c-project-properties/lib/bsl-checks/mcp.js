@@ -30,6 +30,19 @@ const PROJECT_PARAM = {
     "Путь к каталогу проекта (например D:\\Work\\hrm1) или его имя. Можно не указывать, если проект один.",
 };
 
+// Имена, которые агент приносит из чужих наборов правил (1С-наборы под другую сборку MCP).
+// Отвечаем адресно: выдуманное имя не должно превращаться в повторную догадку. В tools/list
+// этих имён нет — поверхность инструментов не растёт.
+const INVENTED_TOOLS = {
+  syntaxcheck: "bsl_check_files",
+  check_1c_code: "bsl_check_files",
+  review_1c_code: "bsl_review",
+  trace_impact: "bsl_check_files",
+  search_function: "rlm: find_module",
+  ssl_search: "v8std_search",
+  templatesearch: "rlm: find_module",
+};
+
 const TOOLS = [
   {
     name: "bsl_check_text",
@@ -507,7 +520,17 @@ async function handleRpc(message, projects) {
   }
   const name = params?.name;
   const tool = TOOLS.find((item) => item.name === name);
-  if (!tool) return { jsonrpc: "2.0", id, error: { code: -32602, message: "неизвестный инструмент: " + name } };
+  if (!tool) {
+    const instead = INVENTED_TOOLS[String(name).toLowerCase()];
+    if (instead) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32602, message: "инструмента " + name + " нет. Используй " + instead + "." },
+      };
+    }
+    return { jsonrpc: "2.0", id, error: { code: -32602, message: "неизвестный инструмент: " + name } };
+  }
   try {
     const payload = await callTool(name, params.arguments || {}, projects);
     // Отказ отдаём и текстом, и полями: текст читает человек в логе, код —

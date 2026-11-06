@@ -732,45 +732,30 @@ window.__ModuleLoader__.load({
               }),
             ],
           }),
-          jsxs("div", {
-            className: "p1c-card",
-            children: [
-              jsx("div", { className: "p1c-card__title", children: "bsl-analyzer" }),
-              jsxs("div", {
-                className: "p1c-row",
+          engineReady
+            ? null
+            : jsxs("div", {
+                className: "p1c-card",
                 children: [
-                  jsx("span", { className: "p1c-row__key", children: "Состояние" }),
-                  jsx("span", {
-                    className: "p1c-row__value p1c-sm",
-                    children: engineReady
-                      ? (engine.shipped ? "входит в сборку" : "установлен") +
-                        (engine.sizeMb ? " · " + engine.sizeMb + " МБ" : "")
-                      : engine.supported
-                        ? "не найден"
-                        : "для этой платформы сборка не закреплена",
+                  jsx("div", { className: "p1c-card__title", children: "bsl-analyzer" }),
+                  jsxs("div", {
+                    className: "p1c-actions",
+                    children: [
+                      engine.supported
+                        ? jsx(Btn, {
+                            variant: "primary",
+                            disabled: busy || !engine.canDownload,
+                            onClick: download,
+                            children: "Скачать",
+                          })
+                        : jsx("span", {
+                            className: "p1c-note p1c-sm",
+                            children: "Для этой платформы движок не закреплён.",
+                          }),
+                    ],
                   }),
                 ],
               }),
-              engineReady && engine.path ? jsx("div", { className: "p1c-note p1c-mono p1c-sm", children: engine.path }) : null,
-              jsxs("div", {
-                className: "p1c-actions",
-                children: [
-                  jsx(Btn, {
-                    variant: engineReady ? undefined : "primary",
-                    disabled: busy || !engine.supported,
-                    onClick: download,
-                    children: engineReady ? "Проверить установку" : engine.canDownload ? "Скачать bsl-analyzer" : "Движок не найден",
-                  }),
-                  jsx("span", {
-                    className: "p1c-note",
-                    children: engine.shipped
-                      ? "Движок лежит в установленном приложении: скачивать ничего не нужно, проверки идут без интернета."
-                      : "Один раз, около 76 МБ. Дальше проверки идут без интернета.",
-                  }),
-                ],
-              }),
-            ],
-          }),
           jsxs("div", {
             className: "p1c-card",
             children: [
@@ -778,7 +763,7 @@ window.__ModuleLoader__.load({
               jsx("div", {
                 className: "p1c-note",
                 children:
-                  "Ответы по стандартам разработки ИТС, БСП и методическим материалам словами. Агент спрашивает их инструментом its_help; справка по API платформы и поиск по документации — у других серверов.",
+                  "Стандарты ИТС, БСП и методички — инструментом its_help.",
               }),
               jsxs("div", {
                 className: "p1c-row",
@@ -1559,10 +1544,6 @@ window.__ModuleLoader__.load({
                               className: "p1c-finding__head",
                               children: [
                                 jsx("span", { className: "p1c-finding__pos p1c-mono", children: finding.line + ":" + finding.column }),
-                                jsx("span", {
-                                  className: "p1c-sev p1c-sev--" + String(finding.severity || "").toLowerCase(),
-                                  children: finding.severity,
-                                }),
 
                                 jsxs("span", {
                                   className: "p1c-finding__acts",
@@ -2248,24 +2229,6 @@ window.__ModuleLoader__.load({
       ];
     }
 
-    /** Флажок «добавить comol»: наши правила разворачиваются всегда. */
-    function RulesetPicker(props) {
-      const set = (props.sets || [])[0] || null;
-      const available = Boolean(set && set.available);
-      return jsxs("div", {
-        className: "p1c-radio",
-        children: [
-          jsx(Check, {
-            checked: props.value === "comol",
-            disabled: props.disabled || !available,
-            title: available ? set.hint : "Набор comol не найден в DSH" + (set && set.root ? ": " + set.root : ""),
-            onChange: (event) => props.onChange(event.target.checked && set ? "comol" : ""),
-            children: "Добавить правила comol",
-          }),
-          jsx("span", { className: "p1c-radio__hint", children: available ? set.hint : "Набор comol не найден в DSH" }),
-        ],
-      });
-    }
     const WIZARD_HOOK = "__dsh1cProjectWizard";
 
     let wizardRequest = null;
@@ -2900,33 +2863,11 @@ window.__ModuleLoader__.load({
       const stepRules = jsx(Card, {
         title: "Правила 1С в проекте",
         hint: jsxs("span", {
-          children: [
-            "Наши правила и плейбуки разворачиваются всегда. Дерево ",
-            jsx("a", {
-              className: "p1c-link",
-              href: (rulesSet && rulesSet.repo) || RULES_REPO,
-              target: "_blank",
-              rel: "noreferrer",
-              children: "comol",
-            }),
-            " можно добавить к ним флажком.",
-          ],
+          children: "Правила и плейбуки 1С разворачиваются в проект вместе с параметрами.", 
         }),
         children: jsxs("div", {
           className: "p1c-stack",
           children: [
-            jsx(RulesetPicker, {
-              sets: rulesets,
-              value: rulesBase,
-              disabled: busy,
-              onChange: (id) => setRulesOptions((options) => ({ ...options, base: id })),
-            }),
-            rulesSet && rulesSet.available
-              ? null
-              : jsx("div", {
-                  className: "p1c-note",
-                  children: "Правила comol не найдены в DSH — развернутся только наши правила.",
-                }),
             rulesBase === "comol"
               ? jsxs("div", {
                   className: "p1c-options",
@@ -3650,12 +3591,6 @@ window.__ModuleLoader__.load({
                     children: jsxs("div", {
                       className: "p1c-stack",
                       children: [
-                        jsx(RulesetPicker, {
-                          sets: rulesets,
-                          value: rulesSelected,
-                          disabled: busy,
-                          onChange: onRulesSelect,
-                        }),
                         rulesSelected === "comol"
                           ? jsxs("div", {
                               className: "p1c-options",
