@@ -128,7 +128,7 @@ function sourceFiles(source) {
 function flatName(rel) {
   return rel
     .replace(/^content\/rules\//u, "")
-    .replace(/^content\/skills\/1c-metadata-manage\/docs\//u, "query-");
+    .replace(/^content\/skills\/1c-metadata-manage\/docs\//u, "");
 }
 
 function main() {
