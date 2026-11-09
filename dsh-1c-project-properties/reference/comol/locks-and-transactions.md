@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/locks-and-transactions.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/locks-and-transactions.md · дословно, без правок -->
 
 ---
 description: Managed locks, transaction boundaries, lock ordering, deadlock prevention, lock modes. Load when designing posting or multi-document operations, debugging lock conflicts, or extending a transactional path.

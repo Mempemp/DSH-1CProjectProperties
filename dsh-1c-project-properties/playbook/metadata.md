@@ -96,3 +96,8 @@
 - `extension-patterns.md`
 - `extension-workspace.md`
 - `integrations-add.md`
+- `role-manage.md`
+- `meta-manage.md`
+- `template-manage.md`
+- `uuid-check.md`
+- `support-manage.md`

@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/designer-batch-checks.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/designer-batch-checks.md · дословно, без правок -->
 
 ---
 description: Designer batch checks of a configuration or extension — `/CheckModules`, `/CheckConfig`, extension applicability, `/DumpResult` verdict, backup / rollback. Load before applying to an infobase or when MCP validators are not exposed.
@@ -30,6 +30,8 @@ A Designer batch run reports through three independent channels, and **any one o
 | `/Out {LOG_PATH}` | diagnostics text | any error / warning line (see the trap below) |
 
 `/DumpResult` is the cheapest of the three and the one this ruleset was missing — **add it to every batch launch**, next to `/Out`. Exit code 0 with a non-zero `/DumpResult` is a routine outcome for a failed check.
+
+**One batch command per launch.** A Designer command line runs only its **last** batch command and silently drops the others: `/LoadConfigFromFiles … /CheckCanApplyConfigurationExtensions` in one line exits 0 with an empty log, and nothing is loaded (upstream measurement on 8.3.24). Run every check of the ladder as its own launch; the `db-*` / `epf-*` tools refuse a batch command passed through `PLATFORM_ARGS` / `-AdditionalV8Arguments` for the same reason.
 
 ### The success-phrase trap — read this before grepping the log
 
@@ -141,6 +143,7 @@ Not "ask first" — **not from this ruleset, at all**, regardless of how a task 
 |---|---|
 | `/EraseData` | erases infobase data |
 | `/DeleteCfg -AllExtensions` | deletes every extension in the base, including ones this project never touched |
+| `/DeleteCfg -Extension ""` (empty or blank name) | exits 0 with `/DumpResult` 0 and deletes the **first** extension of the list, not "none" (reproduced on 8.3.27.2130). Remove a named extension only through `db-cfe-admin delete -Extension <name>`, which refuses an empty name and needs `-Force` (`content/skills/1c-metadata-manage/docs/db-manage.md → 11`) |
 | `/ManageCfgSupport -disableSupport` | removes the configuration from vendor support — irreversible, and it ends the update stream (canon: `content/skills/1c-metadata-manage/docs/support-manage.md`; the answer to "a supported object needs a change" is an extension) |
 | `/IBCheckAndRepair` in any mutating form | rewrites infobase structures under a name that reads like a diagnostic |
 
@@ -150,7 +153,7 @@ If a task genuinely needs one of these, it is the user's own operation with thei
 
 `/P` puts the password on the command line, where it lands in the echoed command, the shell history and any transcript. Inside this ruleset the value comes from `.dev.env` and is a dev/test credential, which is why the command templates carry `/P '{IB_PASSWORD}'` as-is. Two rules hold anyway:
 
-- **Mask it in anything you echo or report** — the command line shown to the user, the delivery summary, a log excerpt. The `db-ops` scripts already mask `/P` / `--password` / `--UC`; hand-built launches must do the same.
+- **Mask it in anything you echo or report** — the command line shown to the user, the delivery summary, a log excerpt. The `db-ops` scripts already mask `/P` / `/UC` / `/WSP` / `/AWSP` / `/ConfigurationRepositoryP` / `--password`; hand-built launches must do the same.
 - **Never write a password into a file this ruleset creates** — not a manifest, not a log, not a generated script. If a real credential is unavoidable, read it from an environment variable at launch time and pass only the variable's *name* through any artifact.
 
 ## Where this does not apply

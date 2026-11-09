@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/dev-standards-code-style.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/dev-standards-code-style.md · дословно, без правок -->
 
 ---
 description: BSL code style — formatting, quality metrics, forbidden constructs, naming, public API documentation, typography, comments, and internal review

@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/form-module.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/form-module.md · дословно, без правок -->
 
 ---
 description: Form-module code (`Form.Module.bsl`) — client-server interaction, event handlers wired into `Form.xml`, reserved names, async calls, form-data conversion. Load from `forms.md` when editing form-module logic or adding handlers.
@@ -22,7 +22,9 @@ Patterns, pitfalls, and platform-version mapping (8.3.18+ `Асинх` / `Жда
 
 > **IMPORTANT.** A handler procedure in `Form.Module.bsl` does nothing until the event hook is added to the form XML file (usually `Form.xml` in the parent directory of the module code).
 
-The reverse holds too: every handler and command `Action` named in `Form.xml` must exist in the module exactly once, with the directive of its event — `&НаКлиенте` for client events and commands, `&НаСервере` for `*AtServer` events — and no more mandatory parameters than the platform passes. `form-validate` checks this (check 13).
+The reverse holds too: every handler and command `Action` named in `Form.xml` must exist in the module exactly once, with the directive of its event — `&НаКлиенте` for client events and commands, `&НаСервере` for `*AtServer` events — and no more mandatory parameters than the platform passes. `form-validate` checks this (check 22: a missing or twice-declared handler is an error, the directive and the parameter count are warnings).
+
+`form-compile` and `form-edit` **write `Module.bsl` themselves** (`form-add` only creates it with the five empty regions): for every handler or command `Action` they bind that the module does not declare yet, they append an empty procedure with the catalog directive and parameters (`// Вставить содержимое обработчика.`) into the standard region (`ОбработчикиСобытийФормы`, `ОбработчикиСобытийЭлементовШапкиФормы`, `ОбработчикиСобытийЭлементовТаблицыФормы<Таблица>`, `ОбработчикиКомандФормы`). A procedure that already exists (name compared case-insensitively) is left as it is; an event without a catalog signature gets no stub. There is no switch to turn this off. Expect the module to change after such a call: re-read it before editing, fill the stub bodies instead of adding a second declaration, and review the module diff together with `Form.xml` (the `Invoke-1CEdit.ps1` preview wrapper covers both files — `docs/edit-preview.md`).
 
 Event hooks in XML look like:
 
@@ -89,7 +91,7 @@ In 1C form modules, local variables **must not** be named after standard form-el
 ## Form Data
 
 - Use `ДанныеФормыВЗначение()` / `ЗначениеВДанныеФормы()` to convert between form data and actual objects.
-- The form methods `РеквизитФормыВЗначение()` / `ЗначениеВРеквизитФормы()` need the form context on the server: call them only from `&НаСервере` procedures — never from `&НаКлиенте`, `&НаСервереБезКонтекста` or `&НаКлиентеНаСервереБезКонтекста`. `form-validate` rejects such a call (check 14). Reading `Объект.<Имя>` / `Запись.<Имя>` as form data is fine in client and server procedures alike.
+- The form methods `РеквизитФормыВЗначение()` / `ЗначениеВРеквизитФормы()` need the form context on the server: call them only from `&НаСервере` procedures — never from `&НаКлиенте`, `&НаСервереБезКонтекста` or `&НаКлиентеНаСервереБезКонтекста`. `form-validate` rejects such a call (check 29). Reading `Объект.<Имя>` / `Запись.<Имя>` as form data is fine in client and server procedures alike.
 - **Never pass an object to `ЗначениеЗаполнено()`** — the result of `РеквизитФормыВЗначение("Объект")`, a `СправочникОбъект` / `ДокументОбъект`, a record set. The platform raises «Проверка мутабельных значений на заполненность не поддерживается» at run time (the call compiles). Check what you actually mean: the reference (`ЗначениеЗаполнено(Объект.Ссылка)`), a specific attribute, or `ЭтоНовый()`.
 - Bind object fields through the main attribute — `Объект.<Имя>` (`Запись.<Имя>` in a register record form) — and never add a form attribute with the same name as an object field: the value stays in the form and never reaches the object, and in a record form a flat copy costs the standard write commands (details — `forms-add.md → Main attribute and standard commands`).
 - Remember that form attributes are not the same as object attributes — they are form-specific representations.

@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/query-design.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/query-design.md · дословно, без правок -->
 
 ---
 description: Entry point for 1C query work — pick the exact companion rules and skill docs for writing, optimizing, and reviewing queries. Load first for any non-trivial query task; load companions only via the routing table below.

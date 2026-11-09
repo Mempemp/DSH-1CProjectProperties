@@ -359,3 +359,6 @@
 - `async-methods.md`
 - `platform-solutions.md`
 - `logging-strategy.md`
+- `bsp-manage.md`
+- `cfe-manage.md`
+- `repo-sdlc.md`

@@ -17,14 +17,32 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 
-const PIN = "18e3383da1e436ef980440503ae590da9b8722bf";
+const PIN = "ef070d1955289fa88440a8b85273cdf3b0c31a27";
 const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "reference", "comol");
 
 /** Берём целиком. */
 const INCLUDE_DIRS = ["content/rules/"];
 const INCLUDE_FILES = [
+  // Запросы: правила построения и оптимизации — домен, а не мануал инструмента.
   "content/skills/1c-metadata-manage/docs/query-writing.md",
   "content/skills/1c-metadata-manage/docs/query-optimization.md",
+  // Остальные справки их скилла: берём целиком те, где доменного знания больше,
+  // чем вызовов инструментов. В пине ef070d1 тела 14 стандартов из content/rules
+  // пустые (только заголовки, текст живёт в их MCP), поэтому проза про права,
+  // БСП, СКД, расширения и макеты есть только здесь.
+  "content/skills/1c-metadata-manage/docs/role-manage.md",
+  "content/skills/1c-metadata-manage/docs/bsp-manage.md",
+  "content/skills/1c-metadata-manage/docs/support-manage.md",
+  "content/skills/1c-metadata-manage/docs/cfe-manage.md",
+  "content/skills/1c-metadata-manage/docs/skd-manage.md",
+  "content/skills/1c-metadata-manage/docs/form-manage.md",
+  "content/skills/1c-metadata-manage/docs/meta-manage.md",
+  "content/skills/1c-metadata-manage/docs/template-manage.md",
+  "content/skills/1c-metadata-manage/docs/uuid-check.md",
+  // Обычные формы и поведение платформы в UI-тестах: формат файла и замеры.
+  "content/skills/v8unpack-cf/docs/ordinary-forms.md",
+  "content/skills/1c-qa-testing/docs/platform-behaviour.md",
+  "content/skills/1c-repository-manage/docs/repo-sdlc.md",
 ];
 
 /**
@@ -126,9 +144,9 @@ function sourceFiles(source) {
 }
 
 function flatName(rel) {
-  return rel
-    .replace(/^content\/rules\//u, "")
-    .replace(/^content\/skills\/1c-metadata-manage\/docs\//u, "");
+  if (rel.startsWith("content/rules/")) return rel.slice("content/rules/".length);
+  const docs = rel.indexOf("/docs/");
+  return docs === -1 ? rel.split("/").pop() : rel.slice(docs + "/docs/".length);
 }
 
 function main() {

@@ -103,7 +103,7 @@ check(
     .every((name) => existsSync(join(refDir, name))),
 );
 const lockRef = refDir ? read(join(refDir, "locks-and-transactions.md")) : "";
-check("справочник: дословный текст с указанием источника", lockRef.includes("comol/ai_rules_1c @ 18e3383d"));
+check("справочник: дословный текст с указанием источника", lockRef.includes("comol/ai_rules_1c @ ef070d1"));
 const manifestPlain = JSON.parse(read(join(project, ".dsh", "1c-rules.json")));
 check("манифест: withComol=false", manifestPlain.withComol === false);
 check("сводка: развёрнуто без comol", rulesSummary(project).withComol === false);

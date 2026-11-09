@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/help-corpus-retrieval.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/help-corpus-retrieval.md · дословно, без правок -->
 
 ---
 description: Retrieving routed 1C standards from `1C-docs-mcp` — the `standards` tool, the `standards(name="…") §N` reference form, paging, unavailable server. Load when following a `standards(name=…)` reference for the first time in a session.

@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/integrations-add.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/integrations-add.md · дословно, без правок -->
 
 ---
 description: when writing code that integrates 1C with another system (HTTP services, REST, message queues, webhooks)

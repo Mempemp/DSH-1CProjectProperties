@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/getconfigfiles.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/getconfigfiles.md · дословно, без правок -->
 
 ---
 description: Configuration file synchronization — full, incremental and selected-object export, partial file import, and integration with repository refresh and database update. Load when extracting or synchronizing configuration sources with an infobase.

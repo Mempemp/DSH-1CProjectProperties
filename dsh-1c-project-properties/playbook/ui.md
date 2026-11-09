@@ -75,3 +75,6 @@
 - `form-patterns.md`
 - `forms.md`
 - `forms-add.md`
+- `form-manage.md`
+- `ordinary-forms.md`
+- `platform-behaviour.md`

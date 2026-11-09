@@ -1,4 +1,4 @@
-<!-- источник: comol/ai_rules_1c @ 18e3383da1e436ef980440503ae590da9b8722bf · content/rules/forms-add.md · дословно, без правок -->
+<!-- источник: comol/ai_rules_1c @ ef070d1955289fa88440a8b85273cdf3b0c31a27 · content/rules/forms-add.md · дословно, без правок -->
 
 ---
 description: Creating or substantially changing a managed form (`Form.xml` + `Form.Module.bsl`), including typical-form modification, element placement, fill checks, commands. Load from `forms.md` for any form creation or presentation task.
@@ -60,7 +60,7 @@ All typical form modifications are performed **programmatically**, not visually.
 ### Main attribute and standard commands
 
 - Object fields are bound as `Объект.<Имя>` (`Запись.<Имя>` in an information-register record form). Never create a form attribute with the same name as an object field to «show» it: the value lives only in the form, never reaches the object, and is lost on write.
-- A register record form keeps its standard «Записать» / «Записать и закрыть» only while its main attribute is `Запись` of type `InformationRegisterRecordManager.<Имя>` with `SavedData=true`; flat form attributes in its place remove the object semantics together with those commands. `form-add` creates exactly that main attribute; `form-validate` check 12b rejects a default object / record form whose main attribute belongs to another object.
+- A register record form keeps its standard «Записать» / «Записать и закрыть» only while its main attribute is `Запись` of type `InformationRegisterRecordManager.<Имя>` with `SavedData=true`; flat form attributes in its place remove the object semantics together with those commands. `form-add` creates exactly that main attribute; `form-validate` check 28 rejects a default object / record form whose main attribute belongs to another object.
 
 ## Companion rules
 
