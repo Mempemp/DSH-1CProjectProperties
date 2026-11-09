@@ -1,6 +1,6 @@
 {
   "name": "dsh-1c-project-properties",
-  "version": "0.15.5",
+  "version": "0.15.6",
   "description": "Параметры 1С в разрезе проекта и движок rlm: визард добавления проекта, проверка подключения внешним соединением, выгрузка/загрузка конфигурации, правила 1С, справка по платформе, MCP-сервер анализа кода rlm-tools-bsl",
   "keywords": [
     "1c",
@@ -26,6 +26,7 @@
   "files": [
     "lib",
     "playbook",
+    "reference",
     "vendor",
     "cordis.patch.yml",
     "README.md",

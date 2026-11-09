@@ -37,6 +37,12 @@ export const ENVIRONMENT_REL = OWN_DIR_REL + "/environment.md";
 /** Плейбуки плагина: шапка AGENTS.md, USER-RULES.md, справка — рядом с lib/. */
 const PLAYBOOK_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "playbook");
 
+/**
+ * Полный текст доменных правил comol, перенесённый дословно (tools/port-comol-reference.mjs).
+ * В проект не копируется: лежит один раз в пакете плагина, путь попадает в environment.md.
+ */
+const REFERENCE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "reference", "comol");
+
 const MANIFEST_FORMAT = "dsh-1c-rules-deploy";
 const MANIFEST_FORMAT_VERSION = 3;
 const MANAGED_MARK = "<!-- managed by dsh-1c-project-properties: 1c-rules -->";
@@ -402,8 +408,24 @@ function renderComolBlock() {
   ].join("\n");
 }
 
+/** Файлы справочника: имя и первая строка описания, если она есть. */
+function referenceFiles() {
+  if (!isDirectory(REFERENCE_DIR)) return [];
+  return readdirSync(REFERENCE_DIR)
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .map((name) => {
+      const lines = readText(join(REFERENCE_DIR, name)).split("\n");
+      const heading = lines.find((line) => line.startsWith("# "));
+      const description = lines.find((line) => line.startsWith("title:") || line.startsWith("description:"));
+      const title = (heading || description || "").replace(/^#+\s*/u, "").replace(/^(title|description):\s*/u, "").trim();
+      return { name, title: title.slice(0, 90) };
+    });
+}
+
 function renderEnvironmentDoc(dshHome, withComol) {
   const available = configuredServers(dshHome);
+  const reference = referenceFiles();
   const lines = [
     "# Окружение DSH",
     "",
@@ -417,6 +439,9 @@ function renderEnvironmentDoc(dshHome, withComol) {
     "| Наши правила и плейбуки | `.dsh/rules-own/` |",
     "| Точка входа | `AGENTS.md` |",
     "| Правила пользователя | `USER-RULES.md` |",
+    ...(reference.length
+      ? ["| Полный текст правил 1С (дословно, из comol) | `" + posix(REFERENCE_DIR) + "` |"]
+      : []),
     ...(withComol
       ? [
           "| Правила comol | `.dsh/rules-1c/` |",
@@ -439,6 +464,17 @@ function renderEnvironmentDoc(dshHome, withComol) {
           "синтаксиса). Если сервер не установлен, правило, которое на него опирается,",
           "обязано перейти к резервной ветке — молчаливое «сделаю как получится»",
           "недопустимо.",
+          "",
+        ]
+      : []),
+    ...(reference.length
+      ? [
+          "## Полный справочник правил",
+          "",
+          "Плейбуки — короткая инструкция «что делать». Дословный текст правил comol лежит в",
+          "пакете плагина; читать по этим путям, когда плейбука не хватает:",
+          "",
+          ...reference.map((entry) => "- `" + posix(REFERENCE_DIR) + "/" + entry.name + "`" + (entry.title ? " — " + entry.title : "")),
           "",
         ]
       : []),
