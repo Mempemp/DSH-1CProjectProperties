@@ -23,26 +23,12 @@ const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "referenc
 /** Берём целиком. */
 const INCLUDE_DIRS = ["content/rules/"];
 const INCLUDE_FILES = [
-  // Запросы: правила построения и оптимизации — домен, а не мануал инструмента.
+  // Справки их инструментов (роли, БСП, СКД, расширения, макеты, формы) не переносим:
+  // 18% строк там — блоки команд, заголовки «Compile / Edit / Validate», таблицы
+  // флагов. Агент получает инструкции вызывать инструменты, которых в поставке нет.
+  // Доменные факты из них перенесены в плейбуки как требования к работе.
   "content/skills/1c-metadata-manage/docs/query-writing.md",
   "content/skills/1c-metadata-manage/docs/query-optimization.md",
-  // Остальные справки их скилла: берём целиком те, где доменного знания больше,
-  // чем вызовов инструментов. В пине ef070d1 тела 14 стандартов из content/rules
-  // пустые (только заголовки, текст живёт в их MCP), поэтому проза про права,
-  // БСП, СКД, расширения и макеты есть только здесь.
-  "content/skills/1c-metadata-manage/docs/role-manage.md",
-  "content/skills/1c-metadata-manage/docs/bsp-manage.md",
-  "content/skills/1c-metadata-manage/docs/support-manage.md",
-  "content/skills/1c-metadata-manage/docs/cfe-manage.md",
-  "content/skills/1c-metadata-manage/docs/skd-manage.md",
-  "content/skills/1c-metadata-manage/docs/form-manage.md",
-  "content/skills/1c-metadata-manage/docs/meta-manage.md",
-  "content/skills/1c-metadata-manage/docs/template-manage.md",
-  "content/skills/1c-metadata-manage/docs/uuid-check.md",
-  // Обычные формы и поведение платформы в UI-тестах: формат файла и замеры.
-  "content/skills/v8unpack-cf/docs/ordinary-forms.md",
-  "content/skills/1c-qa-testing/docs/platform-behaviour.md",
-  "content/skills/1c-repository-manage/docs/repo-sdlc.md",
 ];
 
 /**

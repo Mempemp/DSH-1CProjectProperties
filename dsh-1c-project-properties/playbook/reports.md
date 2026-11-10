@@ -66,4 +66,3 @@
 - `dcs-design.md`
 - `dcs-advanced-composition.md`
 - `query-optimization.md`
-- `skd-manage.md`
