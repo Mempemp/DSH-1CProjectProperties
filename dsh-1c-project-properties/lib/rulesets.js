@@ -4,8 +4,8 @@
 
 export const COMOL = Object.freeze({
   id: "comol",
-  title: "Правила comol",
+  title: "Правила 1С: расширенный набор",
   payloadDir: "1c-rules",
-  hint: "Правила, роли субагентов, команды, навыки и OpenSpec — нужны MCP-серверы comol.",
+  hint: "Полные тексты правил 1С, роли субагентов, сценарии, навыки и OpenSpec.",
   repo: "https://github.com/comol/ai_rules_1c",
 });

@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 
 const PIN = "ef070d1955289fa88440a8b85273cdf3b0c31a27";
-const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "reference", "comol");
+const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "reference", "full");
 
 /** Берём целиком. */
 const INCLUDE_DIRS = ["content/rules/"];
@@ -159,11 +159,7 @@ function main() {
   const removed = [];
   for (const [rel, text] of picked) {
     const target = flatName(rel);
-    const body = [
-      `<!-- источник: comol/ai_rules_1c @ ${PIN} · ${rel} · дословно, без правок -->`,
-      "",
-      text.replace(/\r\n/gu, "\n").replace(/\n*$/u, "\n"),
-    ].join("\n");
+    const body = text.replace(/\r\n/gu, "\n").replace(/\n*$/u, "\n");
     const file = join(OUT_DIR, target);
     if (existsSync(file) && readFileSync(file, "utf8") === body) unchanged.push(target);
     else {

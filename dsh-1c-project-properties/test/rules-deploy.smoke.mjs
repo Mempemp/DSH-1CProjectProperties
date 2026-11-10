@@ -1,7 +1,7 @@
-// Правила 1С в проекте: наш слой разворачивается всегда, comol — флажком.
+// Правила 1С в проекте: наш слой разворачивается всегда, расширенный набор — флажком.
 // Снятый флажок ничего не удаляет; удаление — только явная команда removeRules.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -85,17 +85,17 @@ check("плейбук its.md на месте", existsSync(join(project, ".dsh", 
 check("остальные плейбуки на месте", existsSync(join(project, ".dsh", "rules-own", "find.md")));
 check("AGENTS.md создан", existsSync(join(project, "AGENTS.md")));
 const agentsPlain = read(join(project, "AGENTS.md"));
-check("AGENTS.md без блока comol", !agentsPlain.includes("ruleset:comol:start"));
+check("AGENTS.md без блока набора", !agentsPlain.includes("ruleset:full:start"));
 check("в AGENTS.md есть маршрут к code.md", agentsPlain.includes(".dsh/rules-own/code.md"));
 check("в AGENTS.md есть маршрут к review.md", agentsPlain.includes(".dsh/rules-own/review.md"));
 check("в AGENTS.md есть маршрут к its.md", agentsPlain.includes(".dsh/rules-own/its.md"));
 check("USER-RULES.md создан", existsSync(join(project, "USER-RULES.md")));
-check("comol не развёрнут", !existsSync(join(project, ".dsh", "rules-1c")));
+check("набор не развёрнут", !existsSync(join(project, ".dsh", "rules-1c")));
 check(".dev.env не создан", !existsSync(join(project, ".dev.env")));
 const envPlain = read(join(project, ".dsh", "rules-own", "environment.md"));
-check("справка без comol", !envPlain.includes(".dsh/rules-1c") && envPlain.includes(".dsh/rules-own"));
+check("справка без набора", !envPlain.includes(".dsh/rules-1c") && envPlain.includes(".dsh/rules-own"));
 check("справка: справочник правил подключён", envPlain.includes("Полный справочник правил") && envPlain.includes("reference"));
-const refDir = (envPlain.match(/\| Полный текст правил 1С \(дословно, из comol\) \| `([^`]+)` \|/u) || [])[1] || "";
+const refDir = (envPlain.match(/\| Полные тексты правил 1С \| `([^`]+)` \|/u) || [])[1] || "";
 check("справка: путь справочника существует", refDir !== "" && existsSync(refDir), refDir);
 check(
   "справочник: файлы на месте",
@@ -103,21 +103,24 @@ check(
     .every((name) => existsSync(join(refDir, name))),
 );
 const lockRef = refDir ? read(join(refDir, "locks-and-transactions.md")) : "";
-check("справочник: дословный текст с указанием источника", lockRef.includes("comol/ai_rules_1c @ ef070d1"));
+check("справочник: файл на месте и начинается с правила", lockRef.length > 500 && !lockRef.startsWith("<!--"));
+const refText = readdirSync(refDir).map((n) => read(join(refDir, n))).join("\n");
+check("справочник: без заметок об источнике", !/источник:|дословно, без правок|без правок/u.test(refText));
+check("AGENTS.md: без пояснений про набор", !/оправдан|не нужен|поэтому|в отличие/u.test(read(join(project, "AGENTS.md"))));
 const manifestPlain = JSON.parse(read(join(project, ".dsh", "1c-rules.json")));
 check("манифест: withComol=false", manifestPlain.withComol === false);
 check("сводка: развёрнуто без comol", rulesSummary(project).withComol === false);
 
 console.log("флажок comol");
 const withComol = deployRules({ dshHome: home, projectPath: project, withComol: true, params, common });
-check("развёртывание с comol прошло", withComol.ok === true, withComol.error);
-check("правила comol на месте", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("развёртывание с набором прошло", withComol.ok === true, withComol.error);
+check("правила набора на месте", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
 check("роли на месте", existsSync(join(project, ".dsh", "agents-1c", "explorer.md")));
 check("команды на месте", existsSync(join(project, ".dsh", "commands-1c", "updaterules.md")));
 check("навыки на месте", existsSync(join(project, ".dsh", "skills", "demo", "SKILL.md")));
 check("навыки openspec на месте", existsSync(join(project, ".dsh", "skills", "opsx", "SKILL.md")));
 check("openspec workspace на месте", existsSync(join(project, "openspec", "README.md")));
-check("блок comol в AGENTS.md", read(join(project, "AGENTS.md")).includes("ruleset:comol:start"));
+check("блок набора в AGENTS.md", read(join(project, "AGENTS.md")).includes("ruleset:full:start"));
 const rewritten = read(join(project, ".dsh", "rules-1c", "module-structure.md"));
 check(
   "ссылки переписаны на проектные",
@@ -132,14 +135,14 @@ check(
 );
 check("манифест: withComol=true", JSON.parse(read(join(project, ".dsh", "1c-rules.json"))).withComol === true);
 const statusOn = rulesStatus({ dshHome: home, projectPath: project });
-check("состояние: comol развёрнут", statusOn.withComol === true && statusOn.counts.files > 10);
+check("состояние: набор развёрнут", statusOn.withComol === true && statusOn.counts.files > 10);
 check("состояние: правок нет", statusOn.modified.length === 0, statusOn.modified.join(", "));
 
 console.log("снятый флажок не удаляет");
 const off = deployRules({ dshHome: home, projectPath: project, withComol: false, params, common });
-check("развёртывание без comol прошло", off.ok === true, off.error);
-check("файлы comol остались", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
-check("блок comol убран из AGENTS.md", !read(join(project, "AGENTS.md")).includes("ruleset:comol:start"));
+check("развёртывание без набора прошло", off.ok === true, off.error);
+check("файлы набора остались", existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("блок набора убран из AGENTS.md", !read(join(project, "AGENTS.md")).includes("ruleset:full:start"));
 check("манифест: withComol=false", JSON.parse(read(join(project, ".dsh", "1c-rules.json"))).withComol === false);
 
 console.log("правки пользователя");
@@ -172,7 +175,7 @@ check("удаление прошло", removed.ok === true, removed.error);
 check("AGENTS.md удалён", !existsSync(join(project, "AGENTS.md")));
 check("USER-RULES.md остался", existsSync(join(project, "USER-RULES.md")));
 check("манифест удалён", !existsSync(join(project, ".dsh", "1c-rules.json")));
-check("файлы comol удалены", !existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
+check("файлы набора удалены", !existsSync(join(project, ".dsh", "rules-1c", "module-structure.md")));
 check("правка пользователя осталась", existsSync(codeFile) && read(codeFile).includes("<!-- моя правка -->"));
 
 console.log("переписывание ссылок");

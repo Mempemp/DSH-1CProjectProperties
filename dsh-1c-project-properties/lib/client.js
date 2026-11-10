@@ -2217,10 +2217,10 @@ window.__ModuleLoader__.load({
       return [
         {
           id: "comol",
-          title: pack.title || "Правила comol",
+          title: pack.title || "Правила 1С: расширенный набор",
           hint:
             pack.hint ||
-            "Правила, роли субагентов, команды, навыки и OpenSpec — нужны MCP-серверы comol.",
+            "Полные тексты правил 1С, роли субагентов, сценарии, навыки и OpenSpec.",
           repo: pack.repo || "https://github.com/comol/ai_rules_1c",
           payloadDir: "1c-rules",
           available: Boolean(payload && payload.ok),
@@ -3322,7 +3322,7 @@ window.__ModuleLoader__.load({
         ? "Разложить наши правила в проект"
         : "Обновить файлы правил";
       const deployedLine = rulesDeployedFlag
-        ? "Развёрнуто: наши правила" + (deployedWithComol ? " + comol" : "")
+        ? "Развёрнуто: наши правила" + (deployedWithComol ? " + расширенный набор" : "")
         : "";
 
       const rulesResultBlock = rulesResult
