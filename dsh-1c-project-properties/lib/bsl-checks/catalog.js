@@ -13,12 +13,12 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// Уровни — те же четыре, что отдаёт анализатор: своего маппинга нет.
 export const SEVERITY_RU = {
-  BLOCKER: "блокер",
-  CRITICAL: "критично",
-  MAJOR: "важно",
-  MINOR: "средне",
-  INFO: "инфо",
+  error: "ошибка",
+  warning: "предупреждение",
+  info: "инфо",
+  hint: "подсказка",
 };
 
 export const TYPE_RU = {
@@ -26,33 +26,6 @@ export const TYPE_RU = {
   smell: "качество кода",
   vuln: "уязвимость",
   hot: "опасное место",
-};
-
-// У анализатора две шкалы: каталог отдаёт пять уровней SonarQube, а поток
-// находок — семь собственных. Сводим их к одному порядку, чтобы порог показа
-// работал одинаково для обеих.
-export const SEVERITY_RANK = {
-  Hint: 0,
-  Information: 1,
-  Info: 1,
-  INFO: 1,
-  Warning: 2,
-  Minor: 2,
-  MINOR: 2,
-  Major: 3,
-  MAJOR: 3,
-  Error: 3,
-  Critical: 4,
-  CRITICAL: 4,
-  Blocker: 5,
-  BLOCKER: 5,
-};
-
-export const THRESHOLDS = {
-  all: { rank: 0, label: "всё, включая подсказки" },
-  warn: { rank: 2, label: "предупреждения и выше" },
-  major: { rank: 3, label: "важное и выше" },
-  crit: { rank: 4, label: "только критичное" },
 };
 
 // Порядок важен: первое совпадение выигрывает.
@@ -108,6 +81,7 @@ export function catalog() {
       code: rule.c,
       name: rule.n,
       severity: rule.s,
+      enabled: rule.ad !== false,
       type: rule.t,
       tags: Array.isArray(rule.g) ? rule.g : [],
       description: rule.d,
@@ -134,11 +108,8 @@ export function categories() {
   return out;
 }
 
-export function severityRank(value) {
-  return SEVERITY_RANK[value] ?? 1;
-}
-
-export function passesThreshold(severity, threshold) {
-  const limit = THRESHOLDS[threshold]?.rank ?? 0;
-  return severityRank(severity) >= limit;
+/** Правило включено в анализаторе по умолчанию (снимок rules export). */
+export function enabledByDefault(code) {
+  const rule = catalogByCode().get(code);
+  return rule ? rule.enabled !== false : true;
 }

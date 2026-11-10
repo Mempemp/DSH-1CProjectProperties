@@ -867,9 +867,7 @@ window.__ModuleLoader__.load({
                             " · " +
                             preset.enabled +
                             " из " +
-                            total +
-                            " · " +
-                            preset.threshold,
+                            total,
                         }),
                         jsxs("span", {
                           className: "p1c-preset__acts",
@@ -1031,7 +1029,6 @@ window.__ModuleLoader__.load({
               project: props.path || undefined,
               presetId: data.presetId,
               off,
-              threshold: data.threshold,
             }),
           });
           if (props.onApplied) props.onApplied(result);

@@ -5,8 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { markFindings, acceptFindings, loadAccepted } from "./acceptance.js";
-import { passesThreshold } from "./catalog.js";
-import { writeConfig } from "./config.js";
+import { syncResidentConfig, writeConfig } from "./config.js";
 import { ensureEngine, resolveBinary, runAnalyze } from "./engine.js";
 import { checkFilesResident } from "./snippet.js";
 import { dropSymbolDependent, metadataState } from "./metadata.js";
@@ -32,7 +31,6 @@ function saveLast(projectRoot, result, dumpRoot) {
     checkedAt: result.checkedAt,
     elapsedSecs: result.elapsedSecs,
     presetId: result.presetId,
-    threshold: result.threshold,
     dumpDir: dumpRoot,
     counts: result.counts,
     metadata: result.metadata,
@@ -95,7 +93,7 @@ function readLines(file) {
  * @param {{
  *   projectRoot: string,
  *   dumpRoot: string,
- *   preset: { id: string, off: string[], threshold: string },
+ *   preset: { id: string, off: string[] },
  *   files?: string[],
  *   by?: string,
  *   autoAccept?: boolean,
@@ -116,6 +114,8 @@ export async function checkFiles(options) {
   }
 
   const configFile = writeConfig({ projectRoot, dumpRoot, off: preset.off });
+  // Резидентный сервер читает конфигурацию из корня выгрузки, а не из пакета плагина.
+  const rulesConfig = syncResidentConfig({ dumpRoot, off: preset.off });
   const relativeFiles = wanted.map((file) => relativeTo(dumpRoot, file));
 
   // Файлы проверяет резидентный сервер: конфигурация загружается один раз, и
@@ -130,7 +130,6 @@ export async function checkFiles(options) {
       sourceDir: dumpRoot,
       files: relativeFiles,
       off: preset.off,
-      threshold: preset.threshold,
       timeoutMs: options.timeoutMs,
     });
     if (resident.ok) {
@@ -210,31 +209,28 @@ export async function checkFiles(options) {
     all.push(...marked.findings);
   }
 
-  const visible = all.filter((finding) => passesThreshold(finding.severity, preset.threshold));
+  // Порога по важности нет: что профиль включил, то и показываем.
   const counts = {
-    total: visible.length,
-    new: visible.filter((finding) => !finding.accepted).length,
-    accepted: visible.filter((finding) => finding.accepted).length,
+    total: all.length,
+    new: all.filter((finding) => !finding.accepted).length,
+    accepted: all.filter((finding) => finding.accepted).length,
     all: all.length,
   };
 
   const result = {
     ok: true,
     presetId: preset.id,
-    threshold: preset.threshold,
     checkedAt: new Date().toISOString(),
     elapsedSecs: run.elapsedSecs,
-    files: [...files.values()].map((file) => {
-      const visibleHere = file.findings.filter((finding) => passesThreshold(finding.severity, preset.threshold));
-      return {
-        path: file.path,
-        passed: file.findings.length === 0,
-        findings: visibleHere,
-        hidden: file.findings.length - visibleHere.length,
-      };
-    }),
+    files: [...files.values()].map((file) => ({
+      path: file.path,
+      passed: file.findings.length === 0,
+      findings: file.findings,
+      hidden: 0,
+    })),
     counts,
-    findings: visible,
+    findings: all,
+    warnings: rulesConfig.ok ? [] : [rulesConfig.error],
     metadata: { ...metadata, droppedByMetadata },
   };
 

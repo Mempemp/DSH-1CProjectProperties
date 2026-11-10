@@ -36,21 +36,12 @@ export const BUILTIN_PRESETS = [
   {
     id: "recommended",
     name: "Рекомендуемый",
-    threshold: "all",
     off: RECOMMENDED_OFF,
     builtin: true,
   },
   {
     id: "strict",
     name: "Строгий",
-    threshold: "all",
-    off: [],
-    builtin: true,
-  },
-  {
-    id: "warn",
-    name: "Предупреждения и выше",
-    threshold: "major",
     off: [],
     builtin: true,
   },
@@ -90,7 +81,6 @@ function normalizeCustom(item) {
     id: item.id.trim(),
     name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : "Мой набор",
     off: Array.isArray(item.off) ? item.off.filter((code) => typeof code === "string") : [],
-    threshold: typeof item.threshold === "string" && item.threshold.trim() ? item.threshold.trim() : "major",
   };
 }
 
@@ -143,13 +133,12 @@ export function enabledCount(preset) {
 
 // Правка набора поставки превращается в копию: возвращаем id, на который
 // должен переключиться проект.
-export function editPreset({ id, name, off, threshold }) {
+export function editPreset({ id, name, off }) {
   const builtin = BUILTIN_PRESETS.find((preset) => preset.id === id);
   if (builtin) {
     return createPreset({
       name: name || builtin.name + " (мой)",
       off: Array.isArray(off) ? off : builtin.off,
-      threshold: threshold || builtin.threshold,
       base: builtin.id,
     });
   }
@@ -160,7 +149,6 @@ export function editPreset({ id, name, off, threshold }) {
     ...store.presets[index],
     name: typeof name === "string" && name.trim() ? name.trim() : store.presets[index].name,
     off: Array.isArray(off) ? off : store.presets[index].off,
-    threshold: typeof threshold === "string" ? threshold : store.presets[index].threshold,
     updatedAt: new Date().toISOString(),
   };
   store.presets[index] = next;
@@ -168,14 +156,13 @@ export function editPreset({ id, name, off, threshold }) {
   return { ok: true, preset: next };
 }
 
-export function createPreset({ name, off, threshold, base }) {
+export function createPreset({ name, off, base }) {
   const store = readStore();
   const id = "own-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
   const preset = {
     id,
     name: typeof name === "string" && name.trim() ? name.trim() : "Мой набор",
     off: Array.isArray(off) ? off : [],
-    threshold: typeof threshold === "string" ? threshold : "major",
     base: typeof base === "string" ? base : "",
     createdAt: new Date().toISOString(),
   };

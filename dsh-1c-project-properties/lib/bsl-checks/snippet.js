@@ -9,10 +9,13 @@
 // секунды), дальше ответы идут миллисекунды. После пяти минут без работы
 // процесс гасится сам, как и у остальных сервисов плагина.
 import { spawn } from "node:child_process";
-import { passesThreshold } from "./catalog.js";
 import { dropSymbolDependent, metadataState } from "./metadata.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
+// Анализатор по умолчанию отдаёт только error и warning: всё, что ниже, живёт
+// в counts и не попадает в findings. Уровень отбора задаёт профиль правил, а не
+// анализатор, поэтому просим самый низкий порог и режем по `off` сами.
+const MIN_SEVERITY = "hint";
 const IDLE_MS = 5 * 60 * 1000;
 
 class McpSession {
@@ -128,11 +131,11 @@ class McpSession {
   }
 }
 
-// Сервер отдаёт важность строчными (warning, error), каталог — заглавными.
-function normalizeSeverity(value) {
-  const text = String(value || "").trim();
-  if (!text) return "Information";
-  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+// Анализатор зовёт уровень `information` в потоке находок и `info` в каталоге —
+// это одно и то же слово, а не другая шкала: приводим только регистр.
+function severityKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return text === "information" ? "info" : text;
 }
 
 function parseJson(text) {
@@ -178,7 +181,7 @@ async function waitReady(session, timeoutMs) {
  * Проверить файлы резидентным сервером: после первого прогрева это десятки
  * миллисекунд вместо секунды на перезапуск командной строки.
  *
- * @param {{ binary: string, sourceDir: string, files: string[], off?: string[], threshold?: string, timeoutMs?: number }} options
+ * @param {{ binary: string, sourceDir: string, files: string[], off?: string[], timeoutMs?: number }} options
  */
 export async function checkFilesResident(options) {
   const timeoutMs = options.timeoutMs || 90000;
@@ -193,18 +196,21 @@ export async function checkFilesResident(options) {
     const metadata = metadataState({ dumpRoot: options.sourceDir, stderr: "" });
     const files = [];
     for (const file of options.files) {
-      const payload = await session.tool("diagnostics", { action: "file", path: file }, timeoutMs);
+      const payload = await session.tool(
+        "diagnostics",
+        { action: "file", path: file, min_severity: MIN_SEVERITY },
+        timeoutMs,
+      );
       const body = payload?.result || payload || {};
       if (body.error) return { ok: false, error: body.detail || body.error };
       const rawAll = Array.isArray(body.findings) ? body.findings : [];
       const raw = metadata.symbolsAvailable ? rawAll : dropSymbolDependent(rawAll).findings;
       const findings = raw
         .filter((item) => !off.has(item.code))
-        .filter((item) => passesThreshold(normalizeSeverity(item.severity), options.threshold || "all"))
         .map((item) => ({
           code: item.code,
           message: item.message,
-          severity: normalizeSeverity(item.severity),
+          severity: severityKey(item.severity),
           line: Number(item.range?.start_line ?? item.start_line ?? 0) + 1,
           column: Number(item.range?.start_column ?? item.start_column ?? 0) + 1,
         }));
@@ -221,7 +227,7 @@ export async function checkFilesResident(options) {
 /**
  * Проверить фрагмент BSL-кода в контексте модуля.
  *
- * @param {{ binary: string, sourceDir: string, code: string, path?: string, off?: string[], threshold?: string, timeoutMs?: number }} options
+ * @param {{ binary: string, sourceDir: string, code: string, path?: string, off?: string[], timeoutMs?: number }} options
  * @returns {Promise<{ ok: boolean, findings?: object[], state?: string, error?: string }>}
  */
 export async function checkSnippet(options) {
@@ -233,7 +239,7 @@ export async function checkSnippet(options) {
     const ready = await waitReady(session, Math.max(1000, timeoutMs - (Date.now() - started)));
     if (!ready.ok) return { ok: false, error: ready.error, stderr: session.stderr };
 
-    const args = { action: "snippet", code: options.code };
+    const args = { action: "snippet", code: options.code, min_severity: MIN_SEVERITY };
     if (options.path) args.path = options.path;
     const payload = await session.tool("diagnostics", args, timeoutMs);
     session.touch();
@@ -247,11 +253,10 @@ export async function checkSnippet(options) {
     const raw = metadata.symbolsAvailable ? rawAll : dropSymbolDependent(rawAll).findings;
     const findings = raw
       .filter((item) => !off.has(item.code))
-      .filter((item) => passesThreshold(normalizeSeverity(item.severity), options.threshold || "all"))
       .map((item) => ({
         code: item.code,
         message: item.message,
-        severity: normalizeSeverity(item.severity),
+        severity: severityKey(item.severity),
         line: Number(item.range?.start_line ?? item.start_line ?? 0) + 1,
         column: Number(item.range?.start_column ?? item.start_column ?? 0) + 1,
       }));

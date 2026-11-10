@@ -20,11 +20,11 @@ process.env.DSH_BSL_CHECKER_NO_DOWNLOAD = "1";
 const lib = join(here, "..", "lib", "bsl-checks");
 const load = (name) => import("file://" + join(lib, name).replace(/\\/g, "/"));
 
-const { catalog, categories, passesThreshold, THRESHOLDS } = await load("catalog.js");
+const { catalog, categories, enabledByDefault } = await load("catalog.js");
 const presetsModule = await load("presets.js");
 const { loadAccepted, acceptFindings, restoreFindings, markFindings, findingKey } = await load("acceptance.js");
 const { readParams, patchParams, checksReady } = await load("params.js");
-const { writeConfig, CONFIG_FILE } = await load("config.js");
+const { writeConfig, CONFIG_FILE, syncResidentConfig, rulesToEnable, RESIDENT_CONFIG_FILE } = await load("config.js");
 const { registerBslChecksRoutes } = await load("router.js");
 const { metadataState, dropSymbolDependent, metadataObjects } = await load("metadata.js");
 const { startChecksMcpServer } = await load("mcp.js");
@@ -54,15 +54,18 @@ writeFileSync(
 console.log("каталог");
 check("210 правил", catalog().length === 210, catalog().length);
 check("11 категорий", categories().length === 11, categories().length);
-check("порог: важное и выше", passesThreshold("Major", "major") && !passesThreshold("Minor", "major"));
-check("порог: всё", passesThreshold("Hint", "all"));
-// Неизвестный порог трактуем как «показывать всё»: скрыть замечания
-// из-за опечатки в наборе хуже, чем показать лишнее.
-check("неизвестный порог показывает всё", passesThreshold("Major", "нет-такого"));
+// Уровни — ровно те, что отдаёт анализатор: своего маппинга нет.
+check(
+  "уровни из анализатора",
+  catalog().every((rule) => ["error", "warning", "info", "hint"].includes(rule.severity)),
+  [...new Set(catalog().map((rule) => rule.severity))].join(","),
+);
+check("правило анализатора выключено по умолчанию", enabledByDefault("TernaryOperatorUsage") === false);
+check("обычное правило включено по умолчанию", enabledByDefault("ParseError") === true);
 
 console.log("наборы");
 const presets = presetsModule.listPresets();
-check("три набора поставки", presets.presets.filter((item) => item.builtin).length === 3, presets.presets.length);
+check("два набора поставки", presets.presets.filter((item) => item.builtin).length === 2, presets.presets.length);
 // Состав поставки зафиксирован заказчиком: список и порог меняются только
 // вместе с файлом lib/bsl-checks/presets/recommended.md.
 const DELIVERY_OFF = [
@@ -83,9 +86,31 @@ check(
   [...presetsModule.RECOMMENDED_OFF].sort().join(",") === DELIVERY_OFF.join(","),
   presetsModule.RECOMMENDED_OFF.join(","),
 );
-check("поставка: порог «всё»", recommended.threshold === "all", recommended.threshold);
 check("поставка: включено 200 из 210", 210 - recommended.off.length === 200, 210 - recommended.off.length);
 check("поставка: файл-первоисточник на месте", existsSync(join(here, "..", "lib", "bsl-checks", "presets", "recommended.md")));
+console.log("конфигурация для анализатора");
+const dumpCfg = syncResidentConfig({ dumpRoot: dump, off: [] });
+check("конфиг пишется в корень выгрузки", existsSync(join(dump, RESIDENT_CONFIG_FILE)));
+check(
+  "конфиг включает правила, выключенные в анализаторе",
+  dumpCfg.enabled.includes("TernaryOperatorUsage") && dumpCfg.enabled.every((code) => !enabledByDefault(code)),
+);
+check(
+  "правило из off не включается",
+  !syncResidentConfig({ dumpRoot: dump, off: ["TernaryOperatorUsage"] }).enabled.includes("TernaryOperatorUsage"),
+);
+const foreign = join(work, "foreign-dump");
+mkdirSync(foreign, { recursive: true });
+writeFileSync(join(foreign, RESIDENT_CONFIG_FILE), "[diagnostics.parameters]\n", "utf8");
+const conflict = syncResidentConfig({ dumpRoot: foreign, off: [] });
+check("чужой конфиг не перезаписывается", conflict.ok === false && typeof conflict.error === "string");
+check(
+  "чужой конфиг остался как был",
+  readFileSync(join(foreign, RESIDENT_CONFIG_FILE), "utf8") === "[diagnostics.parameters]\n",
+);
+syncResidentConfig({ dumpRoot: dump, off: catalog().map((rule) => rule.code) });
+check("нечего включать — файл убран", !existsSync(join(dump, RESIDENT_CONFIG_FILE)));
+
 check(
   "поставка: все коды есть в каталоге",
   presetsModule.RECOMMENDED_OFF.every((code) => catalog().some((rule) => rule.code === code)),
@@ -93,7 +118,7 @@ check(
 
 const strict = presetsModule.resolvePreset("strict").preset;
 check("строгий включает всё", strict.off.length === 0, strict.off.length);
-const edited = presetsModule.editPreset({ id: "recommended", off: ["LineLength"], threshold: "major" });
+const edited = presetsModule.editPreset({ id: "recommended", off: ["LineLength"] });
 check("правка поставки создаёт копию", edited.ok && edited.preset.id !== "recommended", edited.preset && edited.preset.id);
 check("поставка не изменилась", presetsModule.resolvePreset("recommended").preset.off.length === presetsModule.RECOMMENDED_OFF.length);
 const removed = presetsModule.deletePreset(edited.preset.id);
@@ -150,7 +175,7 @@ const base = "http://127.0.0.1:" + server.address().port + "/1cprops/bsl-checks"
 
 const stateOn = await fetch(base + "/state?project=" + encodeURIComponent(project)).then((r) => r.json());
 check("состояние отдаёт включённые проверки", stateOn.enabled === true);
-check("состояние перечисляет наборы", Array.isArray(stateOn.presets) && stateOn.presets.length >= 3);
+check("состояние перечисляет наборы", Array.isArray(stateOn.presets) && stateOn.presets.length >= 2);
 check("состояние знает про каталог", stateOn.catalog.total === 210, stateOn.catalog && stateOn.catalog.total);
 
 const rules = await fetch(base + "/rules?project=" + encodeURIComponent(project)).then((r) => r.json());
@@ -161,7 +186,7 @@ check("выключенное правило помечено", rules.rules.some
 const rulesByPreset = await fetch(base + "/rules?presetId=recommended").then((r) => r.json());
 check("правила читаются по набору без проекта", rulesByPreset.ok === true && rulesByPreset.presetId === "recommended");
 const presetStore = await fetch(base + "/presets").then((r) => r.json());
-check("список наборов без проекта", presetStore.ok === true && Array.isArray(presetStore.presets) && presetStore.presets.length >= 3);
+check("список наборов без проекта", presetStore.ok === true && Array.isArray(presetStore.presets) && presetStore.presets.length >= 2);
 check("без проекта нет признака выбранного набора", presetStore.presetId === undefined);
 
 // Пропуск должен быть виден в панели сразу: отметки читаются из хранилища.

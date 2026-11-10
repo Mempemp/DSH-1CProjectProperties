@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { acceptFindings, loadAccepted, restoreFindings } from "./acceptance.js";
-import { categories, catalog, THRESHOLDS } from "./catalog.js";
+import { categories, catalog } from "./catalog.js";
 import { checkFiles, loadLast } from "./check.js";
 import { CONFIG_FILE } from "./config.js";
 import { engineStatus, ensureEngine } from "./engine.js";
@@ -144,13 +144,10 @@ function state(projectPath) {
     presetName: preset.name,
     presetFallback: fallback,
     presetBuiltin: Boolean(preset.builtin),
-    threshold: preset.threshold,
-    thresholds: THRESHOLDS,
     presets: listPresets().presets.map((item) => ({
       id: item.id,
       name: item.name,
       builtin: Boolean(item.builtin),
-      threshold: item.threshold,
       enabled: rules.length - item.off.length,
     })),
     engine,
@@ -186,7 +183,6 @@ export function registerBslChecksRoutes(ctx, deps = {}) {
         id: item.id,
         name: item.name,
         builtin: Boolean(item.builtin),
-        threshold: item.threshold,
         enabled: rules.length - item.off.length,
       })),
       catalog: { total: rules.length, categories: categories().map((name) => ({ name })) },
@@ -267,7 +263,6 @@ export function registerBslChecksRoutes(ctx, deps = {}) {
             presetId: preset.id,
             presetName: preset.name,
             presetBuiltin: Boolean(preset.builtin),
-            threshold: preset.threshold,
             rules: catalog().map((rule) => ({
               code: rule.code,
               name: rule.name,
@@ -343,7 +338,6 @@ export function registerBslChecksRoutes(ctx, deps = {}) {
             const created = createPreset({
               name: body.name || (basePreset ? basePreset.name + " (мой)" : ""),
               off: Array.isArray(body.off) ? body.off : basePreset ? basePreset.off : undefined,
-              threshold: body.threshold || (basePreset ? basePreset.threshold : undefined),
               base: baseId,
             });
             if (created.ok && projectPath) patchParams(projectPath, { checksPreset: created.preset.id });
@@ -354,7 +348,6 @@ export function registerBslChecksRoutes(ctx, deps = {}) {
             id: String(body.presetId || body.id || ""),
             name: body.name,
             off: body.off,
-            threshold: body.threshold,
           });
           if (edited.ok && projectPath) patchParams(projectPath, { checksPreset: edited.preset.id });
           reply(edited);
@@ -437,7 +430,6 @@ export function registerBslChecksRoutes(ctx, deps = {}) {
             code: String(body.code || ""),
             path: body.file ? String(body.file) : undefined,
             off: preset.off,
-            threshold: preset.threshold,
           });
           json(res, result.ok ? 200 : 400, result);
         } catch (error) {

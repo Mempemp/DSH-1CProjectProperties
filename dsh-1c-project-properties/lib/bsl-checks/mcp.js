@@ -15,6 +15,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { acceptFindings, loadAccepted } from "./acceptance.js";
 import { checkFiles, loadLast } from "./check.js";
+import { syncResidentConfig } from "./config.js";
 import { engineStatus, ensureEngine } from "./engine.js";
 import { checksReady, patchParams, readParams } from "./params.js";
 import { resolvePreset } from "./presets.js";
@@ -409,13 +410,14 @@ async function callTool(name, args, projects) {
   if (name === "bsl_check_text") {
     const engine = await ensureBinary();
     if (engine.error) return engine.error;
+    const rulesConfig = syncResidentConfig({ dumpRoot: state.dumpDir, off: preset.off });
+    if (!rulesConfig.ok) return fail("rules_config_conflict", rulesConfig.error, "Уберите или дополните свой bsl-analyzer.toml в корне выгрузки.");
     const result = await checkSnippet({
       binary: engine.binary,
       sourceDir: state.dumpDir,
       code: String(args.code || ""),
       path: args.file ? String(args.file) : undefined,
       off: preset.off,
-      threshold: preset.threshold,
     });
     if (!result.ok) {
       return fail("check_failed", result.error || "проверка не удалась", "Повторите вызов; если не помогает — смотрите журнал DSH.");
