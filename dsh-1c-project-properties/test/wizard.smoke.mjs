@@ -300,14 +300,12 @@ const deps = {
   Summary: stub("Summary"),
   EMPTY_FORM: { infobasePath: "", user: "", password: "", platformPath: "", unlockCode: "", dumpDir: "" },
   EMPTY_RUN: { format: "Hierarchical", update: false, cleanLocks: false },
-  EMPTY_RULES_OPTIONS: { includePassword: false, useEdt: false },
   RESULT_LABEL: { written: "записано файлов", unchanged: "без изменений", preserved: "сохранено ваших", removed: "удалено" },
-  RULES_REPO: "https://github.com/comol/ai_rules_1c",
 };
 
 const factory = new Function(
   "deps",
-  "const { useState, useEffect, useCallback, jsx, jsxs, portal, cx, request, injectStyles, Card, Field, Check, Btn, Dot, JobBox, ChecksCard, CloseIcon, Summary, EMPTY_FORM, EMPTY_RUN, EMPTY_RULES_OPTIONS, RESULT_LABEL, RULES_REPO } = deps;\n" +
+  "const { useState, useEffect, useCallback, jsx, jsxs, portal, cx, request, injectStyles, Card, Field, Check, Btn, Dot, JobBox, ChecksCard, CloseIcon, Summary, EMPTY_FORM, EMPTY_RUN, RESULT_LABEL } = deps;\n" +
     "const WIZARD_STEPS_LOCAL = 0;\n" +
     block +
     "\nreturn { installCreateHook, Wizard, WizardHost, openWizard, closeWizard, snapshot: () => wizardRequest, notifyWizard };",
@@ -377,7 +375,6 @@ const hookValues = [
   true, // is1c
   { ...deps.EMPTY_FORM }, // form
   false, // showPassword
-  { ...deps.EMPTY_RULES_OPTIONS }, // rulesOptions
   null, // rulesResult
   { ...deps.EMPTY_RUN }, // runOptions
   null, // job

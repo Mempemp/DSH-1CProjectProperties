@@ -75,11 +75,3 @@ MCP `rlm`: индекс по выгрузке. Сессия — `rlm_start`, р�
   работаю через `path` в `rlm_start`.
 - **Выгрузка не под git.** `git_search` недоступен: остаются `safe_grep` по
   конкретным модулям из `find_module` и `grep`.
-
-## Полный текст
-
-Дословные правила по этой теме — в справочнике плагина (путь печатается в
-`.dsh/rules-own/environment.md`, раздел «Полный справочник правил»):
-
-- `multi-contour-search.md`
-- `help-corpus-retrieval.md`

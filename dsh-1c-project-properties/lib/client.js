@@ -34,7 +34,6 @@ window.__ModuleLoader__.load({
     const INFOBASE_LIST_ID = "dsh-1cprops-infobases";
     // Ссылка на набор по умолчанию: она же запасная для хоста, который ещё не
     // присылает rulesPayloads.list со ссылками на каждый набор.
-    const RULES_REPO = "https://github.com/comol/ai_rules_1c";
 
     async function request(path, init) {
       const response = await fetch(API + path, {
@@ -2170,10 +2169,6 @@ window.__ModuleLoader__.load({
     // причём динамически — так не нужно выгонять пользователей из базы.
     const EMPTY_LOAD = { updateDb: true, dynamic: true };
 
-    // Разделы развёртывания правил: тот же полный список понимает хост-часть,
-    // и разворачивается всегда целиком — выбирать подмножество в UI не нужно.
-    const EMPTY_RULES_OPTIONS = { includePassword: false, useEdt: false };
-
     const STATUS_LABEL = {
       written: "записано",
       unchanged: "без изменений",
@@ -2210,24 +2205,6 @@ window.__ModuleLoader__.load({
     const WIZARD_PLATFORM_LIST = "dsh-1cprops-wizard-platforms";
     const WIZARD_INFOBASE_LIST = "dsh-1cprops-wizard-infobases";
 
-    /** Наличие payload comol в состоянии хоста и подписи. */
-    function readRulesets(state) {
-      const pack = (state && state.rulesPayloads) || {};
-      const payload = pack.comol || (state && state.rulesPayload) || null;
-      return [
-        {
-          id: "comol",
-          title: pack.title || "Правила 1С: расширенный набор",
-          hint:
-            pack.hint ||
-            "Полные тексты правил 1С, роли субагентов, сценарии, навыки и OpenSpec.",
-          repo: pack.repo || "https://github.com/comol/ai_rules_1c",
-          payloadDir: "1c-rules",
-          available: Boolean(payload && payload.ok),
-          root: (payload && payload.root) || "",
-        },
-      ];
-    }
 
     const WIZARD_HOOK = "__dsh1cProjectWizard";
 
@@ -2417,7 +2394,6 @@ window.__ModuleLoader__.load({
       const [is1c, setIs1c] = useState(target.detect ? Boolean(target.detect.is1c) : null);
       const [form, setForm] = useState({ ...EMPTY_FORM, ...((target.detect && target.detect.params) || {}) });
       const [showPassword, setShowPassword] = useState(false);
-      const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
       const [rulesResult, setRulesResult] = useState(null);
       const [runOptions, setRunOptions] = useState(EMPTY_RUN);
       const [job, setJob] = useState(null);
@@ -2548,19 +2524,14 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // Развёртывание правил: наш слой всегда, comol — если стоит флажок.
+      // Раскладка правил в проект.
       const deployRules = async () => {
         setBusy(true);
         setStatus(null);
         try {
           const result = await request("/rules-deploy", {
             method: "POST",
-            body: JSON.stringify({
-              path: target.path,
-              withComol: rulesOptions.base === "comol",
-              includePassword: rulesOptions.includePassword,
-              useEdt: rulesOptions.useEdt,
-            }),
+            body: JSON.stringify({ path: target.path }),
           });
           setRulesResult(result);
         } catch (error) {
@@ -2655,9 +2626,6 @@ window.__ModuleLoader__.load({
       const platforms = (state && state.platforms) || [];
       const infoBases = (state && state.infobases) || [];
       const commonPlatform = (state && state.common && state.common.platformPath) || "";
-      const rulesets = readRulesets(state);
-      const rulesBase = rulesOptions.base;
-      const rulesSet = rulesets[0] || null;
       // Наш слой не зависит от payload'а: кнопка доступна всегда.
       const rulesReady = true;
       const canRun = Boolean(form.infobasePath) && baseSaved;
@@ -2869,27 +2837,6 @@ window.__ModuleLoader__.load({
         children: jsxs("div", {
           className: "p1c-stack",
           children: [
-            rulesBase === "comol"
-              ? jsxs("div", {
-                  className: "p1c-options",
-                  children: [
-                    jsx(Check, {
-                      checked: rulesOptions.useEdt,
-                      disabled: busy,
-                      onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
-                      title: "В EDT другой набор исходников — ссылки в правилах переписываются под его структуру",
-                      children: "проект ведётся в 1С:EDT (другая структура исходников)",
-                    }),
-                    jsx(Check, {
-                      checked: rulesOptions.includePassword,
-                      disabled: busy,
-                      title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
-                      onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
-                      children: "записать пароль базы в .dev.env",
-                    }),
-                  ],
-                })
-              : null,
             jsx("div", {
               className: "p1c-actions",
               children: jsx(Btn, {
@@ -3042,7 +2989,7 @@ window.__ModuleLoader__.load({
 
       const effectivePlatform = form.platformPath || commonPlatform;
       const rulesSummary = rulesResult && rulesResult.ok
-        ? "развёрнуты: " + ((rulesSet && rulesSet.title) || rulesBase)
+        ? "развёрнуты"
         : detect && detect.hasRules
           ? "уже были в проекте"
           : "не развёрнуты";
@@ -3251,13 +3198,8 @@ window.__ModuleLoader__.load({
         platformPlaceholder,
         infoBases,
         platforms,
-        rulesets,
-        rulesSelected,
         rulesDeployed,
-        onRulesSelect,
         rulesResult,
-        rulesOptions,
-        setRulesOptions,
         onRulesDeploy,
         onSave,
         onClear,
@@ -3309,21 +3251,12 @@ window.__ModuleLoader__.load({
         : null;
 
       // ── блок правил 1С ─────────────────────────────────────────────────────
-      // Подпись кнопки зависит от того, что уже лежит в проекте: набора нет —
-      // «Развернуть», тот же набор — «Обновить», другой — «Сменить набор…».
       const rulesDeployedFlag = Boolean(rulesDeployed && rulesDeployed.deployed);
-      const deployedWithComol = Boolean(rulesDeployedFlag && rulesDeployed.withComol);
-      const rulesActionLabel = !rulesDeployedFlag
-        ? "Развернуть"
-        : deployedWithComol === (rulesSelected === "comol")
-          ? "Обновить"
-          : "Применить";
-      const rulesActionTitle = !rulesDeployedFlag
-        ? "Разложить наши правила в проект"
-        : "Обновить файлы правил";
-      const deployedLine = rulesDeployedFlag
-        ? "Развёрнуто: наши правила" + (deployedWithComol ? " + расширенный набор" : "")
-        : "";
+      const rulesActionLabel = rulesDeployedFlag ? "Обновить" : "Развернуть";
+      const rulesActionTitle = rulesDeployedFlag
+        ? "Обновить файлы правил"
+        : "Разложить правила в проект";
+      const deployedLine = rulesDeployedFlag ? "Развёрнуто" : "";
 
       const rulesResultBlock = rulesResult
         ? jsxs("details", {
@@ -3592,26 +3525,6 @@ window.__ModuleLoader__.load({
                     children: jsxs("div", {
                       className: "p1c-stack",
                       children: [
-                        rulesSelected === "comol"
-                          ? jsxs("div", {
-                              className: "p1c-options",
-                              children: [
-                                jsx(Check, {
-                                  checked: rulesOptions.useEdt,
-                                  disabled: busy,
-                                  onChange: (event) => setRulesOptions((o) => ({ ...o, useEdt: event.target.checked })),
-                                  children: "в проекте используется 1С:EDT",
-                                }),
-                                jsx(Check, {
-                                  checked: rulesOptions.includePassword,
-                                  disabled: busy,
-                                  title: "Записать пароль базы в .dev.env (по умолчанию не переносится: файл часто попадает в git)",
-                                  onChange: (event) => setRulesOptions((o) => ({ ...o, includePassword: event.target.checked })),
-                                  children: "записать пароль базы в .dev.env",
-                                }),
-                              ],
-                            })
-                          : null,
                         jsxs("div", {
                           className: "p1c-actions",
                           children: [
@@ -3679,7 +3592,6 @@ window.__ModuleLoader__.load({
       const [runOptions, setRunOptions] = useState(EMPTY_RUN);
       const [loadOptions, setLoadOptions] = useState(EMPTY_LOAD);
       const [rulesResult, setRulesResult] = useState(null);
-      const [rulesOptions, setRulesOptions] = useState(EMPTY_RULES_OPTIONS);
       const [opError, setOpError] = useState(null);
       const [platformCtx, setPlatformCtx] = useState(null);
 
@@ -3904,29 +3816,18 @@ window.__ModuleLoader__.load({
       // ── правила 1С в проекте ───────────────────────────────────────────────
       useEffect(() => {
         setRulesResult(null);
-        setRulesOptions({ ...EMPTY_RULES_OPTIONS });
       }, [openPath]);
 
-      const rulesSets = readRulesets(state);
       const rulesDeployed = project && project.rules ? project.rules : null;
-      const rulesDeployedWithComol = Boolean(
-        rulesDeployed && rulesDeployed.deployed && rulesDeployed.withComol,
-      );
-      const rulesSelected = rulesOptions.base || (rulesDeployedWithComol ? "comol" : "");
 
-      /** Разложить наши правила и, если стоит флажок, дерево comol. */
+      /** Разложить правила в проект. */
       const deployRulesTo = async () => {
         if (!project) return;
         setBusy(true);
         try {
           const result = await request("/rules-deploy", {
             method: "POST",
-            body: JSON.stringify({
-              path: project.path,
-              withComol: rulesSelected === "comol",
-              includePassword: rulesOptions.includePassword,
-              useEdt: rulesOptions.useEdt,
-            }),
+            body: JSON.stringify({ path: project.path }),
           });
           setRulesResult(result);
           if (result && result.ok === true) {
@@ -4061,13 +3962,8 @@ window.__ModuleLoader__.load({
             platformPlaceholder,
             infoBases,
             platforms,
-            rulesets: rulesSets,
-            rulesSelected,
             rulesDeployed,
-            onRulesSelect: (id) => setRulesOptions((options) => ({ ...options, base: id })),
             rulesResult,
-            rulesOptions,
-            setRulesOptions,
             onRulesDeploy: requestRulesDeploy,
             onSave: saveProject,
             onClear: clearProject,

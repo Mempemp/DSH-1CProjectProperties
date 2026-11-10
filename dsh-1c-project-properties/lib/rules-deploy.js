@@ -1,9 +1,8 @@
 // Раскладка правил в проект.
 //
-// Всегда разворачивается наш слой: AGENTS.md, плейбуки в `.dsh/rules-own/`,
-// USER-RULES.md и справка environment.md. Если пользователь поставил флажок,
-// сверху кладётся дерево набора. Файлы, которые уже лежат в проекте, плагин не
-// удаляет: снятый флажок означает «больше не разворачивать», а не «стереть».
+// Разворачивается один слой: AGENTS.md, плейбуки в `.dsh/rules-own/`,
+// USER-RULES.md и справка environment.md. Файлы, которые уже лежат в проекте,
+// плагин не удаляет: повторная раскладка не затирает правки пользователя.
 
 import { createHash } from "node:crypto";
 import {
@@ -19,17 +18,9 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMOL } from "./rulesets.js";
 
 // ── раскладка ───────────────────────────────────────────────────────────────
 
-export const PAYLOAD_DIR = COMOL.payloadDir;
-export const PAYLOAD_MANIFEST = "payload.json";
-
-export const RULES_DIR_REL = ".dsh/rules-1c";
-export const AGENTS_DIR_REL = ".dsh/agents-1c";
-export const COMMANDS_DIR_REL = ".dsh/commands-1c";
-export const SKILLS_DIR_REL = ".dsh/skills";
 export const OWN_DIR_REL = ".dsh/rules-own";
 export const MANIFEST_REL = ".dsh/1c-rules.json";
 export const ENVIRONMENT_REL = OWN_DIR_REL + "/environment.md";
@@ -37,14 +28,8 @@ export const ENVIRONMENT_REL = OWN_DIR_REL + "/environment.md";
 /** Плейбуки плагина: шапка AGENTS.md, USER-RULES.md, справка — рядом с lib/. */
 const PLAYBOOK_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "playbook");
 
-/**
- * Полные тексты правил 1С, перенесённые дословно (tools/port-comol-reference.mjs).
- * В проект не копируется: лежит один раз в пакете плагина, путь попадает в environment.md.
- */
-const REFERENCE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "reference", "full");
-
 const MANIFEST_FORMAT = "dsh-1c-rules-deploy";
-const MANIFEST_FORMAT_VERSION = 3;
+const MANIFEST_FORMAT_VERSION = 4;
 const MANAGED_MARK = "<!-- managed by dsh-1c-project-properties: 1c-rules -->";
 const MIGRATION_START = "<!-- 1c-rules:migrated:start -->";
 const MIGRATION_END = "<!-- 1c-rules:migrated:end -->";
@@ -58,6 +43,8 @@ const USER_RULES_FALLBACK = [
   "Свои правила проекта. Файл не перезаписывается плагином: пишите здесь, а не в `AGENTS.md`.",
   "",
 ].join("\n");
+
+// ── утилиты ─────────────────────────────────────────────────────────────────
 
 // ── утилиты ─────────────────────────────────────────────────────────────────
 
@@ -153,30 +140,6 @@ function removeEmptyDirs(dir, stopAt) {
   }
 }
 
-/**
- * Ссылки вида `content/rules/<файл>` из репозитория-источника → проектные.
- * Форма `skills/<имя>/...` — путь относительно каталога навыков.
- */
-export function rewritePaths(text) {
-  let out = String(text);
-  out = out.replace(
-    /content\/(rules|agents|commands)\/([A-Za-z0-9._<>-]+\.md)/gu,
-    (_match, section, name) => `${sectionTarget(section)}/${name}`,
-  );
-  out = out.replace(/content\/skills\//gu, `${SKILLS_DIR_REL}/`);
-  out = out.replace(
-    /(^|[\s`"'(])skills\/([A-Za-z0-9._<>-]+)\//gu,
-    (_match, lead, name) => `${lead}${SKILLS_DIR_REL}/${name}/`,
-  );
-  return out;
-}
-
-function sectionTarget(section) {
-  if (section === "rules") return RULES_DIR_REL;
-  if (section === "agents") return AGENTS_DIR_REL;
-  return COMMANDS_DIR_REL;
-}
-
 function configuredServers(dshHome) {
   const names = new Set();
   for (const file of [join(dshHome, "mcp-servers.json"), join(dshHome, "dsh-mcp.json")]) {
@@ -188,44 +151,6 @@ function configuredServers(dshHome) {
     }
   }
   return [...names].sort();
-}
-
-// ── .dev.env ────────────────────────────────────────────────────────────────
-
-export function renderDevEnv(exampleText, values) {
-  const known = new Set(Object.keys(values));
-  const seen = new Set();
-  const out = String(exampleText)
-    .split(/\r?\n/u)
-    .map((line) => {
-      const match = /^([A-Z0-9_]+)\s*=/u.exec(line);
-      if (!match) return line;
-      const key = match[1];
-      if (!known.has(key)) return line;
-      seen.add(key);
-      return `${key}=${values[key]}`;
-    });
-  const missing = [...known].filter((key) => !seen.has(key)).sort();
-  if (missing.length > 0) {
-    out.push("", "# Добавлено плагином 1С: Параметры проектов при развёртывании правил.");
-    for (const key of missing) out.push(`${key}=${values[key]}`);
-  }
-  return out.join("\n").replace(/\n*$/u, "\n");
-}
-
-function readConfigurationValue(projectPath) {
-  const values = { platformVersion: "", prefix: "" };
-  const configuration = join(projectPath, "Configuration.xml");
-  if (isFile(configuration)) {
-    const match = /<CompatibilityMode>([^<]+)<\/CompatibilityMode>/u.exec(readText(configuration));
-    if (match) values.platformVersion = match[1].trim();
-  }
-  const extension = join(projectPath, "ConfigurationExtension.xml");
-  if (isFile(extension)) {
-    const match = /<NamePrefix>([^<]*)<\/NamePrefix>/u.exec(readText(extension));
-    if (match) values.prefix = match[1].trim();
-  }
-  return values;
 }
 
 // ── журнал и манифест ───────────────────────────────────────────────────────
@@ -308,7 +233,7 @@ function readDeployManifest(projectPath) {
       byPath.set(posix(entry.path), { digest: entry.digest, binary: entry.binary === true });
     }
   }
-  return { raw: parsed, byPath, withComol: parsed.withComol === true };
+  return { raw: parsed, byPath };
 }
 
 /**
@@ -324,59 +249,9 @@ function matchesTracked(file, entry) {
   }
 }
 
-// ── payload ─────────────────────────────────────────────────────────────────
-
-/**
- * Состояние payload'а набора в $DSH_HOME. Отсутствие — не ошибка плагина, а
- * нормальный случай, поэтому возвращается флагом, а не исключением.
- */
-export function readPayload(dshHome) {
-  const root = join(dshHome, COMOL.payloadDir);
-  const manifestFile = join(root, PAYLOAD_MANIFEST);
-  const seeded = "Его кладёт DSH Desktop при первом запуске (элемент «payload» каталога установщика).";
-  if (!existsSync(root)) {
-    return {
-      ok: false,
-      root,
-      manifestFile,
-      error: `набор «${COMOL.title}» не найден: ${root}. ${seeded}`,
-    };
-  }
-  const contentDir = join(root, "content");
-  if (!isDirectory(contentDir)) {
-    return {
-      ok: false,
-      root,
-      manifestFile,
-      error: "в наборе правил нет каталога content: " + contentDir,
-    };
-  }
-  const parsed = readJson(manifestFile);
-  const manifest =
-    parsed && typeof parsed === "object"
-      ? parsed
-      : { id: COMOL.id, version: "", digest: "", seededAt: "", derived: true };
-  return {
-    ok: true,
-    root,
-    manifestFile,
-    contentDir,
-    manifest,
-    derived: manifest.derived === true,
-  };
-}
-
-// ── точка входа и справка ──────────────────────────────────────────────────
-
 function playbookText(name) {
   const local = join(PLAYBOOK_DIR, name);
   return isFile(local) ? readText(local) : "";
-}
-
-function payloadText(name, payload) {
-  if (!payload) return "";
-  const source = join(payload.root, name);
-  return isFile(source) ? readText(source) : "";
 }
 
 function readEntryHeader(journal) {
@@ -394,37 +269,9 @@ function readEntryHeader(journal) {
  * Собственный AGENTS.md набора не вставляется — он ведёт в инструменты,
  * которых в поставке нет.
  */
-function renderComolBlock() {
-  return [
-    "<!-- ruleset:full:start -->",
-    "## Расширенный набор правил",
-    "",
-    "`.dsh/rules-1c/`, `.dsh/agents-1c/`, `.dsh/commands-1c/`, `.dsh/skills/` —",
-    "полные тексты правил, роли субагентов, сценарии, навыки.",
-    "Правило со ссылкой на `mcp_*`: инструмента в проекте нет — применяй резервную",
-    "ветку того же правила. При расхождении главнее этот файл и `.dsh/rules-own/`.",
-    "<!-- ruleset:full:end -->",
-  ].join("\n");
-}
 
-/** Файлы справочника: имя и первая строка описания, если она есть. */
-function referenceFiles() {
-  if (!isDirectory(REFERENCE_DIR)) return [];
-  return readdirSync(REFERENCE_DIR)
-    .filter((name) => name.endsWith(".md"))
-    .sort()
-    .map((name) => {
-      const lines = readText(join(REFERENCE_DIR, name)).split("\n");
-      const heading = lines.find((line) => line.startsWith("# "));
-      const description = lines.find((line) => line.startsWith("title:") || line.startsWith("description:"));
-      const title = (heading || description || "").replace(/^#+\s*/u, "").replace(/^(title|description):\s*/u, "").trim();
-      return { name, title: title.slice(0, 90) };
-    });
-}
-
-function renderEnvironmentDoc(dshHome, withComol) {
+function renderEnvironmentDoc(dshHome) {
   const available = configuredServers(dshHome);
-  const reference = referenceFiles();
   const lines = [
     "# Окружение DSH",
     "",
@@ -438,18 +285,6 @@ function renderEnvironmentDoc(dshHome, withComol) {
     "| Наши правила и плейбуки | `.dsh/rules-own/` |",
     "| Точка входа | `AGENTS.md` |",
     "| Правила пользователя | `USER-RULES.md` |",
-    ...(reference.length
-      ? ["| Полные тексты правил 1С | `" + posix(REFERENCE_DIR) + "` |"]
-      : []),
-    ...(withComol
-      ? [
-          "| Правила 1С: расширенный набор | `.dsh/rules-1c/` |",
-          "| Роли субагентов | `.dsh/agents-1c/` |",
-          "| Сценарии | `.dsh/commands-1c/` |",
-          "| Навыки (DSH видит их как проектные) | `.dsh/skills/` |",
-          "| Параметры платформы | `.dev.env` |",
-        ]
-      : []),
     "",
     "## MCP-серверы",
     "",
@@ -457,29 +292,10 @@ function renderEnvironmentDoc(dshHome, withComol) {
       ? "Настроенные серверы: " + available.map((name) => `\`${name}\``).join(", ") + "."
       : "Настроенных MCP-серверов не найдено.",
     "",
-
-    ...(reference.length
-      ? [
-          "## Полный справочник правил",
-          "",
-          "Плейбуки — короткая инструкция «что делать». Полные тексты — в пакете",
-          "плагина; читать файл по теме, когда плейбука не хватает:",
-          "",
-          ...reference.map((entry) => "- `" + posix(REFERENCE_DIR) + "/" + entry.name + "`" + (entry.title ? " — " + entry.title : "")),
-          "",
-        ]
-      : []),
     "## Замечания",
     "",
     "- DSH сам загружает только `AGENTS.md`; остальные файлы читаются по ссылкам.",
     "- `USER-RULES.md` не загружается автоматически — его читают по ссылке из `AGENTS.md`.",
-    ...(withComol
-      ? [
-          "- Навыки из `.dsh/skills` имеют приоритет над пользовательскими `$DSH_HOME/skills`.",
-          "- Файлы в `.dsh/agents-1c/` — роли для передачи промптом, а не подключаемые агенты.",
-          "- Файлы в `.dsh/commands-1c/` — сценарии, их выполняют по названию, а не слэшем.",
-        ]
-      : []),
     "",
   ];
   return lines.join("\n");
@@ -489,14 +305,14 @@ function renderEnvironmentDoc(dshHome, withComol) {
  * Точка входа правил. Чужой AGENTS.md не затирается, а уезжает в
  * `AGENTS.md.bak.md` с вклейкой в USER-RULES.md: это текст пользователя.
  */
+
 function deployEntry(journal, context) {
-  const { projectPath, withComol, tracked, record, recordKept } = context;
+  const { projectPath, tracked, record, recordKept } = context;
   const targets = entryTargets(projectPath);
-  const block = withComol ? renderComolBlock() : "";
   const header = readEntryHeader(journal);
   const lines = [MANAGED_MARK, header, ""];
   if (!header.includes(ENVIRONMENT_REL)) lines.push(`> Окружение DSH: \`${ENVIRONMENT_REL}\`.`, "");
-  if (block !== "") lines.push(block, "");
+
   const managed = lines.join("\n");
   const trackedEntry = tracked.get("AGENTS.md");
 
@@ -568,32 +384,14 @@ function uniqueBackupPath(projectPath) {
 // ── развёртывание ───────────────────────────────────────────────────────────
 
 /**
- * Разворачивает наши правила и, если включён флажок, расширенный набор.
- * Ничего не удаляет: снятый флажок означает «больше не разворачивать».
+ * Раскладывает правила в проект: AGENTS.md, плейбуки, USER-RULES.md, справка.
+ * Ничего не удаляет; правки пользователя в плейбуках остаются за ним.
  */
 export function deployRules(options) {
-  const {
-    dshHome,
-    projectPath,
-    withComol = false,
-    params = {},
-    common = {},
-    includePassword = false,
-    useEdt = false,
-    dryRun = false,
-    force = false,
-  } = options;
+  const { dshHome, projectPath, dryRun = false, force = false } = options;
 
   if (!isDirectory(projectPath)) {
-    return { ok: false, withComol, dryRun, error: "папка проекта не найдена: " + projectPath };
-  }
-
-  let payload = null;
-  if (withComol) {
-    payload = readPayload(dshHome);
-    if (!payload.ok) {
-      return { ok: false, withComol, dryRun, error: payload.error, payload };
-    }
+    return { ok: false, dryRun, error: "папка проекта не найдена: " + projectPath };
   }
 
   const previous = readDeployManifest(projectPath);
@@ -611,89 +409,8 @@ export function deployRules(options) {
     record(targetRel, binary ? sha256File(file) : sha256(readText(file)), binary);
   };
 
-  const copySection = (sourceDir, targetDir) => {
-    if (!isDirectory(sourceDir)) return;
-    for (const rel of listFiles(sourceDir)) {
-      const targetRel = posix(join(targetDir, rel));
-      const targetFile = join(projectPath, targetRel);
-      const isText = rel.endsWith(".md");
-      const result = isText
-        ? journal.putFile(
-            targetFile,
-            targetRel,
-            rewritePaths(readText(join(sourceDir, rel))),
-            trackedDigest(targetRel),
-          )
-        : journal.putCopy(join(sourceDir, rel), targetFile, targetRel, trackedDigest(targetRel));
-      record(targetRel, result.digest, !isText);
-    }
-  };
+  deployEntry(journal, { projectPath, tracked, record, recordKept });
 
-  // Точка входа и файлы пользователя — всегда.
-  deployEntry(journal, { projectPath, withComol, tracked, record, recordKept });
-
-  if (withComol) {
-    copySection(join(payload.contentDir, "rules"), RULES_DIR_REL);
-    copySection(join(payload.contentDir, "agents"), AGENTS_DIR_REL);
-    copySection(join(payload.contentDir, "commands"), COMMANDS_DIR_REL);
-    copySection(join(payload.contentDir, "skills"), SKILLS_DIR_REL);
-    copySection(join(payload.contentDir, "openspec-bundle", "claude-code", ".claude", "skills"), SKILLS_DIR_REL);
-
-    const openspecSource = join(payload.root, "openspec");
-    if (isDirectory(openspecSource)) {
-      for (const rel of listFiles(openspecSource)) {
-        const targetRel = posix(join("openspec", rel));
-        const targetFile = join(projectPath, targetRel);
-        if (isFile(targetFile)) {
-          journal.add(targetRel, "unchanged", "OpenSpec не перезаписывается");
-          recordKept(targetRel, targetFile, true);
-          continue;
-        }
-        const result = journal.putCopy(join(openspecSource, rel), targetFile, targetRel, undefined);
-        record(targetRel, result.digest, true);
-      }
-    }
-
-    const envFile = join(projectPath, ".dev.env");
-    if (isFile(envFile)) {
-      journal.add(".dev.env", "unchanged", "файл уже есть — значения пользователя не трогаем");
-      recordKept(".dev.env", envFile, false);
-    } else {
-      const example = readText(join(payload.root, ".dev.env.example"));
-      if (example.trim() === "") {
-        journal.warn("в наборе правил нет .dev.env.example — файл параметров не создан");
-      } else {
-        const detected = readConfigurationValue(projectPath);
-        const values = {
-          PLATFORM_PATH: params.platformPath || common.platformPath || "",
-          PLATFORM_VERSION: detected.platformVersion,
-          INFOBASE_PATH: params.infobasePath || "",
-          IB_USER: params.user || "",
-          USE_EDT: useEdt ? "true" : "false",
-          PREFIX: detected.prefix,
-        };
-        if (includePassword) values.IB_PASSWORD = params.password || "";
-        const text = renderDevEnv(example, values);
-        journal.putFile(envFile, ".dev.env", text, undefined);
-        record(".dev.env", sha256(text));
-        if (!includePassword && (params.password || "") !== "") {
-          journal.note("пароль базы в .dev.env не перенесён (IB_PASSWORD) — включите опцию, если он нужен правилам");
-        }
-        const gitignore = join(projectPath, ".gitignore");
-        if (isFile(gitignore) && !/^\s*\.dev\.env\s*$/mu.test(readText(gitignore))) {
-          journal.warn(".dev.env создан, но его нет в .gitignore проекта — добавьте строку .dev.env");
-        }
-      }
-    }
-  }
-
-  // Дерево набора могло остаться с прошлого развёртывания: файлы не удаляем, но в AGENTS.md
-  // его карта больше не входит — без пометки это выглядит как потеря правил.
-  if (!withComol && isDirectory(join(projectPath, RULES_DIR_REL))) {
-    journal.note("расширенный набор в проекте остался без изменений; в AGENTS.md он не включён");
-  }
-
-  // Наши плейбуки и справка по окружению.
   if (isDirectory(PLAYBOOK_DIR)) {
     for (const rel of listFiles(PLAYBOOK_DIR)) {
       if (rel.includes("/")) continue;
@@ -708,7 +425,8 @@ export function deployRules(options) {
       record(targetRel, result.digest);
     }
   }
-  const environment = renderEnvironmentDoc(dshHome, withComol);
+
+  const environment = renderEnvironmentDoc(dshHome);
   const envResult = journal.putFile(
     join(projectPath, ENVIRONMENT_REL),
     ENVIRONMENT_REL,
@@ -722,18 +440,6 @@ export function deployRules(options) {
     formatVersion: MANIFEST_FORMAT_VERSION,
     project: projectPath,
     deployedAt: new Date().toISOString(),
-    withComol,
-    ...(payload
-      ? {
-          payload: {
-            id: payload.manifest.id ?? COMOL.id,
-            version: payload.manifest.version ?? "",
-            digest: payload.manifest.digest ?? "",
-            seededAt: payload.manifest.seededAt ?? "",
-            derived: payload.derived === true,
-          },
-        }
-      : {}),
     files: [...nextFiles]
       .map(([path, entry]) => ({ path, digest: entry.digest, ...(entry.binary ? { binary: true } : {}) }))
       .sort((a, b) => a.path.localeCompare(b.path)),
@@ -742,16 +448,7 @@ export function deployRules(options) {
 
   return {
     ok: true,
-    withComol,
     dryRun,
-    payload: payload
-      ? {
-          id: payload.manifest.id ?? COMOL.id,
-          version: payload.manifest.version ?? "",
-          digest: payload.manifest.digest ?? "",
-          root: payload.root,
-        }
-      : null,
     summary: journal.counts,
     files: journal.files,
     notes: journal.notes,
@@ -764,32 +461,20 @@ export function deployRules(options) {
 /** Короткая сводка для списка проектов: без чтения и хеширования файлов. */
 export function rulesSummary(projectPath) {
   const manifest = readDeployManifest(projectPath);
-  if (manifest === null) return { deployed: false, withComol: false };
+  if (manifest === null) return { deployed: false };
   return {
     deployed: true,
-    withComol: manifest.withComol,
-    version: manifest.raw.payload?.version ?? "",
-    digest: manifest.raw.payload?.digest ?? "",
     deployedAt: manifest.raw.deployedAt ?? "",
     files: manifest.byPath.size,
-    derived: manifest.raw.payload?.derived === true,
   };
 }
 
-/** Состояние развёртывания: что лежит, что изменено, что исчезло. */
+/** Состояние раскладки: что лежит, что изменено, что исчезло. */
 export function rulesStatus(options = {}) {
-  const { dshHome, projectPath } = options;
+  const { projectPath } = options;
   const manifest = readDeployManifest(projectPath);
-  const payload = readPayload(dshHome);
   if (manifest === null) {
-    return {
-      deployed: false,
-      withComol: false,
-      payload,
-      modified: [],
-      missing: [],
-      counts: { files: 0 },
-    };
+    return { deployed: false, modified: [], missing: [], counts: { files: 0 } };
   }
   const modified = [];
   const missing = [];
@@ -803,15 +488,10 @@ export function rulesStatus(options = {}) {
   }
   return {
     deployed: true,
-    withComol: manifest.withComol,
-    payload,
-    version: manifest.raw.payload?.version ?? "",
-    digest: manifest.raw.payload?.digest ?? "",
     deployedAt: manifest.raw.deployedAt ?? "",
     counts: { files: manifest.byPath.size },
     modified,
     missing,
-    stalePayload: payload.ok && (manifest.raw.payload?.digest ?? "") !== (payload.manifest.digest ?? ""),
   };
 }
 

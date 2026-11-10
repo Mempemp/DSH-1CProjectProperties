@@ -12,13 +12,7 @@ import { homedir } from "node:os";
 import { connect as netConnect } from "node:net";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  deployRules,
-  readPayload,
-  removeRules,
-  rulesSummary,
-} from "./rules-deploy.js";
-import { COMOL } from "./rulesets.js";
+import { deployRules, removeRules, rulesSummary } from "./rules-deploy.js";
 import { applyRlm } from "./rlm-runner.js";
 import { registerBslChecksRoutes } from "./bsl-checks/router.js";
 import { MCP_SERVER_NAME, startChecksMcpServer } from "./bsl-checks/mcp.js";
@@ -937,34 +931,6 @@ function describeProject(entry, common) {
 
 // ── плагин ──────────────────────────────────────────────────────────────────
 
-/**
- * Наличие набора правил в DSH — единственное, что плагин о нём знает. Ни версии
- * развёрнутого набора, ни дрейфа правок в проекте он не считает: карточка правил
- * только блокирует кнопку и объясняет, чего не хватает.
- */
-function payloadInfo(payload) {
-  return {
-    ok: payload?.ok === true,
-    root: payload?.root ?? "",
-    error: payload?.ok ? undefined : payload?.error,
-    version: payload?.ok ? payload?.manifest?.version ?? "" : "",
-    derived: payload?.ok ? payload?.derived === true : false,
-  };
-}
-
-/**
- * Наличие payload'а comol в DSH и его подписи. Наши правила от payload'а не
- * зависят: флажок только добавляет дерево comol к нашей раскладке.
- */
-function describePayloads() {
-  return {
-    comol: payloadInfo(readPayload(DSH_HOME)),
-    title: COMOL.title,
-    hint: COMOL.hint,
-    repo: COMOL.repo,
-  };
-}
-
 // ── визард: что лежит в папке проекта ──────────────────────────────────────
 //
 // Визард добавления проекта спрашивает «это проект 1С?» и подсказывает ответ по
@@ -1699,7 +1665,6 @@ export function apply(ctx) {
       try {
         const common = readCommon();
         const infobases = listInfoBases();
-        const rulesPayloads = describePayloads();
         json(res, 200, {
           ok: true,
           // Движок поднимается последним и под try: сломанный движок не должен отменять
@@ -1713,10 +1678,6 @@ export function apply(ctx) {
           infobases: infobases.items,
           infobasesWebSkipped: infobases.webSkipped,
           infobasesSources: infobases.sources,
-          // Прежнее имя (comol) остаётся: клиент может быть старее и других
-          // наборов не знает. rulesPayloads — полный список для нового клиента.
-          rulesPayload: rulesPayloads.comol,
-          rulesPayloads,
           platformContext: describePlatformContext(),
         });
       } catch (error) {
@@ -1969,9 +1930,8 @@ export function apply(ctx) {
 
   // ── правила 1С в проекте ─────────────────────────────────────────────────
   //
-  // Наш слой (AGENTS.md, плейбуки, USER-RULES.md, environment.md) разворачивается
-  // всегда; comol — только если клиент прислал withComol. Ничего не удаляется:
-  // снятый флажок означает «больше не разворачивать». Подробности — lib/rules-deploy.js.
+  // Раскладка: AGENTS.md, плейбуки, USER-RULES.md, environment.md. Ничего не
+  // удаляется — повторный запуск обновляет только то, что плагин написал сам.
 
   ctx.webServer.register({
     kind: "exact",
@@ -1987,11 +1947,6 @@ export function apply(ctx) {
         const result = deployRules({
           dshHome: DSH_HOME,
           projectPath,
-          withComol: body?.withComol === true,
-          params: readParams(projectPath).params,
-          common: readCommon(),
-          includePassword: body?.includePassword === true,
-          useEdt: body?.useEdt === true,
           dryRun,
           force: body?.force === true,
         });

@@ -26,7 +26,6 @@
   "files": [
     "lib",
     "playbook",
-    "reference",
     "vendor",
     "cordis.patch.yml",
     "README.md",
