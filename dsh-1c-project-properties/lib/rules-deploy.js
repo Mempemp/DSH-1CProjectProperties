@@ -137,10 +137,17 @@ function removeEmptyDirs(dir, stopAt) {
 
 function configuredServers(dshHome) {
   const names = new Set();
-  for (const file of [join(dshHome, "mcp-servers.json"), join(dshHome, "dsh-mcp.json")]) {
+  // Панель MCP держит список в своём хранилище; старые раскладки — по прежним путям.
+  const files = [
+    join(dshHome, "@wingsky-1/dsh-mcp-manager/mcp.json"),
+    join(dshHome, "dsh-mcp.json"),
+    join(dshHome, "mcp-servers.json"),
+  ];
+  for (const file of files) {
     const parsed = readJson(file);
     const servers = Array.isArray(parsed?.servers) ? parsed.servers : [];
     for (const server of servers) {
+      if (server?.enabled === false) continue;
       const name = server?.serverName ?? server?.name ?? server?.id;
       if (typeof name === "string" && name.trim() !== "") names.add(name.trim());
     }

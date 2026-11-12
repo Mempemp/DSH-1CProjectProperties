@@ -12,6 +12,10 @@
 | Платформа | MCP `1c-platform-context`: справка платформы и валидатор BSL | `search`, `info`, `get_members`, `get_constructors`, `validate_module` |
 | Стандарты | MCP `v8std`: знания по платформе и БСП | `v8std_search`, `v8std_get_page`, `v8std_get_related`, `v8std_explain_snippet`, `v8std_explain_diagnostics` |
 | Стандарты ИТС | MCP `1c-naparnik`: ответы по ИТС, БСП и методичкам словами | `its_help` |
+| Интернет | `web_search`, `web_fetch`: поиск и текст страницы | платформа, стандарты, форумы, статьи |
+| Браузер | `browser_open`, `browser_read`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_eval` | страницы за входом и со скриптами; вид интерфейса по снимку |
+| Память | MCP `engram`: `mem_search`, `mem_context`, `mem_save`, `mem_session_start` | что делали в проекте раньше; запись решения |
+| Проверки кода | MCP `1c-bsl-checks`: анализатор bsl-analyzer по пресету проекта | `bsl_check_files`, `bsl_check_text`, `bsl_review`, `bsl_findings_pending` |
 
 Какие серверы реально настроены в этом проекте — `.dsh/rules-own/environment.md`.
 
