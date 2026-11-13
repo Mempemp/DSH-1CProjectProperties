@@ -1,8 +1,8 @@
 // Раскладка правил в проект.
 //
-// Разворачивается один слой: AGENTS.md, плейбуки в `.dsh/rules-own/`,
-// USER-RULES.md и справка environment.md. Файлы, которые уже лежат в проекте,
-// плагин не удаляет: повторная раскладка не затирает правки пользователя.
+// Разворачивается один слой: AGENTS.md, плейбуки в `.dsh/rules-own/` и
+// USER-RULES.md. Файлы, которые уже лежат в проекте, плагин не удаляет:
+// повторная раскладка не затирает правки пользователя.
 
 import { createHash } from "node:crypto";
 import {
@@ -23,7 +23,6 @@ import { fileURLToPath } from "node:url";
 
 export const OWN_DIR_REL = ".dsh/rules-own";
 export const MANIFEST_REL = ".dsh/1c-rules.json";
-export const ENVIRONMENT_REL = OWN_DIR_REL + "/environment.md";
 
 /** Плейбуки плагина: шапка AGENTS.md, USER-RULES.md, справка — рядом с lib/. */
 const PLAYBOOK_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "playbook");
@@ -133,26 +132,6 @@ function removeEmptyDirs(dir, stopAt) {
     }
     break;
   }
-}
-
-function configuredServers(dshHome) {
-  const names = new Set();
-  // Панель MCP держит список в своём хранилище; старые раскладки — по прежним путям.
-  const files = [
-    join(dshHome, "@wingsky-1/dsh-mcp-manager/mcp.json"),
-    join(dshHome, "dsh-mcp.json"),
-    join(dshHome, "mcp-servers.json"),
-  ];
-  for (const file of files) {
-    const parsed = readJson(file);
-    const servers = Array.isArray(parsed?.servers) ? parsed.servers : [];
-    for (const server of servers) {
-      if (server?.enabled === false) continue;
-      const name = server?.serverName ?? server?.name ?? server?.id;
-      if (typeof name === "string" && name.trim() !== "") names.add(name.trim());
-    }
-  }
-  return [...names].sort();
 }
 
 // ── журнал и манифест ───────────────────────────────────────────────────────
@@ -272,29 +251,6 @@ function readEntryHeader(journal) {
  * которых в поставке нет.
  */
 
-function renderEnvironmentDoc(dshHome) {
-  const available = configuredServers(dshHome);
-  const lines = [
-    "# Окружение DSH",
-    "",
-    "## Что где лежит",
-    "",
-    "| Что | Где |",
-    "|---|---|",
-    "| Наши правила и плейбуки | `.dsh/rules-own/` |",
-    "| Точка входа | `AGENTS.md` |",
-    "| Правила пользователя | `USER-RULES.md` |",
-    "",
-    "## MCP-серверы",
-    "",
-    available.length > 0
-      ? "Настроенные серверы: " + available.map((name) => `\`${name}\``).join(", ") + "."
-      : "Настроенных MCP-серверов не найдено.",
-    "",
-  ];
-  return lines.join("\n");
-}
-
 /**
  * Точка входа правил. Чужой AGENTS.md не затирается, а уезжает в
  * `AGENTS.md.bak.md` с вклейкой в USER-RULES.md: это текст пользователя.
@@ -305,7 +261,6 @@ function deployEntry(journal, context) {
   const targets = entryTargets(projectPath);
   const header = readEntryHeader(journal);
   const lines = [MANAGED_MARK, header, ""];
-  if (!header.includes(ENVIRONMENT_REL)) lines.push(`> Окружение DSH: \`${ENVIRONMENT_REL}\`.`, "");
 
   const managed = lines.join("\n");
   const trackedEntry = tracked.get("AGENTS.md");
@@ -420,14 +375,19 @@ export function deployRules(options) {
     }
   }
 
-  const environment = renderEnvironmentDoc(dshHome);
-  const envResult = journal.putFile(
-    join(projectPath, ENVIRONMENT_REL),
-    ENVIRONMENT_REL,
-    environment,
-    trackedDigest(ENVIRONMENT_REL),
-  );
-  record(ENVIRONMENT_REL, envResult.digest);
+  // Справка environment.md больше не разворачивается. У прежних раскладок она
+  // остаётся на диске: убираем, только если файл наш и не правился.
+  const legacyEnv = OWN_DIR_REL + "/environment.md";
+  const legacyEntry = tracked.get(legacyEnv);
+  if (legacyEntry && isFile(join(projectPath, legacyEnv)) && !nextFiles.has(legacyEnv)) {
+    const legacyFile = join(projectPath, legacyEnv);
+    if (matchesTracked(legacyFile, legacyEntry)) {
+      if (!dryRun) unlinkSync(legacyFile);
+      journal.add(legacyEnv, "removed", "файл больше не разворачивается");
+    } else {
+      journal.add(legacyEnv, "preserved", "файл правили — оставлен");
+    }
+  }
 
   const manifest = {
     format: MANIFEST_FORMAT,

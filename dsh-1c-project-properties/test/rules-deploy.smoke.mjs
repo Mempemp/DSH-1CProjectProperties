@@ -1,8 +1,9 @@
-// Раскладка правил в проект: один слой — AGENTS.md, плейбуки, USER-RULES.md,
-// environment.md. Повторный запуск не перезаписывает правки, удаление — только
+// Раскладка правил в проект: один слой — AGENTS.md, плейбуки, USER-RULES.md.
+// Повторный запуск не перезаписывает правки, удаление — только
 // явной командой removeRules.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -39,7 +40,7 @@ check("развёртывание прошло", first.ok === true, first.error)
 const own = join(project, ".dsh", "rules-own");
 const expected = [
   "code.md", "db.md", "edit.md", "find.md", "its.md", "metadata.md",
-  "platform.md", "query.md", "reports.md", "review.md", "ui.md", "environment.md",
+  "platform.md", "query.md", "reports.md", "review.md", "ui.md",
 ];
 const present = readdirSync(own).sort();
 check("плейбуки на месте", expected.every((name) => present.includes(name)), present.join(", "));
@@ -58,10 +59,21 @@ check("без вызовов чужих инструментов", !/mcp__|comol
 check("без пояснений и оправданий", !/оправдан|не нужен|поэтому|в отличие|больше не/u.test(agents));
 check("без блоков второго набора", !/ruleset:|расширенный набор|справочник в пакете/u.test(agents));
 
-const env = read(join(own, "environment.md"));
-check("справка: наш слой", env.includes("`.dsh/rules-own/`") && env.includes("`AGENTS.md`"));
-check("справка: без второго набора", !/rules-1c|agents-1c|commands-1c|reference/u.test(env));
-check("справка: MCP-серверы", env.includes("## MCP-серверы"));
+check("справки о сгенерированных файлах нет", !existsSync(join(own, "environment.md")));
+
+// Прежние раскладки держали environment.md в манифесте: наш файл убираем,
+// правленый оставляем человеку.
+const legacyProject = join(work, "legacy");
+mkdirSync(legacyProject, { recursive: true });
+deployRules({ dshHome: home, projectPath: legacyProject, force: true });
+const legacyEnv = join(legacyProject, ".dsh", "rules-own", "environment.md");
+writeFileSync(legacyEnv, "# Окружение DSH\n", "utf8");
+const legacyManifestPath = join(legacyProject, ".dsh", "1c-rules.json");
+const legacyManifest = JSON.parse(read(legacyManifestPath));
+legacyManifest.files.push({ path: ".dsh/rules-own/environment.md", digest: createHash("sha256").update("# Окружение DSH\n", "utf8").digest("hex") });
+writeFileSync(legacyManifestPath, JSON.stringify(legacyManifest, null, 2) + "\n", "utf8");
+deployRules({ dshHome: home, projectPath: legacyProject });
+check("старая справка убрана", !existsSync(legacyEnv));
 
 console.log("манифест и состояние");
 const manifest = JSON.parse(read(join(project, ".dsh", "1c-rules.json")));

@@ -17,7 +17,6 @@
 | Память | MCP `engram`: `mem_search`, `mem_context`, `mem_save`, `mem_session_start` | что делали в проекте раньше; запись решения |
 | Проверки кода | MCP `1c-bsl-checks`: анализатор bsl-analyzer по пресету проекта | `bsl_check_files`, `bsl_check_text`, `bsl_review`, `bsl_findings_pending` |
 
-Какие серверы реально настроены в этом проекте — `.dsh/rules-own/environment.md`.
 
 ## Задача → плейбук
 
