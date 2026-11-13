@@ -21,6 +21,10 @@ const DEFAULT_PORT = 9330;
 // Холодный старт (uv-обёртка → python → импорт пакета) на рабочей машине занимает
 // около 30 с, поэтому окно ожидания вдвое больше: иначе здоровый сервер объявлялся мёртвым.
 const START_TIMEOUT_MS = 60_000;
+// Автоперезапуск упавшего сервера: паузы между попытками, дальше — только руками.
+const WATCHDOG_DELAYS_MS = [3_000, 8_000, 20_000];
+// Столько сервер должен прожить, чтобы считать попытки закрытыми.
+const WATCHDOG_STABLE_MS = 60_000;
 const STOP_TIMEOUT_MS = 8_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const LOG_ROTATE_BYTES = 2 * 1024 * 1024;
@@ -570,6 +574,8 @@ function createRuntime(ctx, config) {
     mcpRegistration: [],
     lastError: null,
     lastExit: null,
+    // Сторож: сколько автоперезапусков уже сделано и когда будет следующий.
+    watchdog: { attempts: 0, timer: null, nextAt: null, stableTimer: null },
     index: {
       job: null,
       jobSeq: 0,
@@ -614,6 +620,7 @@ function snapshot(rt) {
       startedAt: rt.startedAt,
       uptimeMs: rt.startedAt ? Date.now() - rt.startedAt : null,
       lastError: rt.lastError,
+      restarts: { attempts: rt.watchdog?.attempts ?? 0, nextAt: rt.watchdog?.nextAt ?? null },
       portOwner: running ? null : portOwner(config.port),
     },
     config: { command: config.command, port: config.port, env: config.env, takeover: config.takeover, detected, sources },
@@ -712,6 +719,56 @@ async function autoInstall(rt) {
   }
 }
 
+function clearWatchdog(rt) {
+  if (rt.watchdog.timer) clearTimeout(rt.watchdog.timer);
+  if (rt.watchdog.stableTimer) clearTimeout(rt.watchdog.stableTimer);
+  rt.watchdog.timer = null;
+  rt.watchdog.stableTimer = null;
+  rt.watchdog.nextAt = null;
+}
+
+// Сервер прожил достаточно — попытки сторожа начинаем с нуля.
+function markWatchdogStable(rt) {
+  if (rt.watchdog.stableTimer) clearTimeout(rt.watchdog.stableTimer);
+  rt.watchdog.stableTimer = setTimeout(() => {
+    rt.watchdog.stableTimer = null;
+    rt.watchdog.attempts = 0;
+  }, WATCHDOG_STABLE_MS);
+  rt.watchdog.stableTimer.unref?.();
+}
+
+// Процесс завершился сам: поднимаем его обратно, пока не кончились попытки.
+// Запись в менеджере MCP остаётся прежней — порт тот же, поэтому чинить её не нужно.
+function scheduleWatchdog(rt, reason) {
+  if (rt.stopping) return;
+  if (rt.watchdog.attempts >= WATCHDOG_DELAYS_MS.length) {
+    rt.lastError = `${reason}; автоперезапуск исчерпан`;
+    logInfo(rt, "автоперезапуск исчерпан, сервер поднимается только вручную");
+    return;
+  }
+  const delay = WATCHDOG_DELAYS_MS[rt.watchdog.attempts];
+  rt.watchdog.attempts += 1;
+  rt.watchdog.nextAt = Date.now() + delay;
+  logInfo(rt, `сервер упал: ${reason}; перезапуск через ${Math.round(delay / 1000)} с (попытка ${rt.watchdog.attempts}/${WATCHDOG_DELAYS_MS.length})`);
+  rt.watchdog.timer = setTimeout(async () => {
+    rt.watchdog.timer = null;
+    rt.watchdog.nextAt = null;
+    if (rt.stopping || rt.child || rt.adopted) return;
+    try {
+      const state = await startServer(rt);
+      if (state?.server?.running && state.server.version) {
+        logInfo(rt, "сервер поднят заново");
+        return;
+      }
+      scheduleWatchdog(rt, rt.lastError || "перезапуск не удался");
+    } catch (error) {
+      rt.lastError = "перезапуск не удался: " + (error?.message || String(error));
+      scheduleWatchdog(rt, rt.lastError);
+    }
+  }, delay);
+  rt.watchdog.timer.unref?.();
+}
+
 async function startServer(rt) {
   if (rt.child || rt.adopted || rt.starting) return snapshot(rt);
   rt.starting = true;
@@ -775,7 +832,10 @@ async function startServer(rt) {
         rt.startedAt = null;
         rt.version = null;
         rt.lastExit = { code, signal: signal ?? null, at: new Date().toISOString() };
-        if (!rt.stopping) rt.lastError = `процесс завершился сам (код ${code ?? signal ?? "?"}); хвост лога — ниже`;
+        if (!rt.stopping) {
+          rt.lastError = `процесс завершился сам (код ${code ?? signal ?? "?"}); хвост лога — ниже`;
+          scheduleWatchdog(rt, `процесс завершился сам (код ${code ?? signal ?? "?"})`);
+        }
       });
       child.on("error", (error) => {
         rt.lastError = "не удалось запустить процесс: " + (error?.message || String(error));
@@ -819,6 +879,7 @@ async function startServer(rt) {
         logInfo(rt, `сервер поднят на ${HOST}:${config.port} (v${late.version ?? "?"})`);
       }
     }
+    if (rt.version && rt.child) markWatchdogStable(rt);
     if (!rt.version) {
       if (!rt.lastError) {
         const owner = portOwner(config.port, true);
@@ -841,6 +902,7 @@ async function stopServer(rt) {
   const owned = rt.childPid;
   const adopted = rt.adopted?.pid ?? null;
   rt.stopping = true;
+  clearWatchdog(rt);
   try {
     if (owned) {
       killTree(owned);

@@ -129,6 +129,24 @@ try {
   check("POST /rlm/restart поднимает сервер заново", restarted.data?.server?.running === true);
   check("pid после перезапуска другой", restarted.data.server.pid !== started.server.pid, `${started.server.pid} → ${restarted.data.server.pid}`);
 
+  // ── 4б. сторож: упавший процесс поднимается сам ─────────────────────────
+  const beforeCrash = (await api("/rlm/state")).data;
+  try {
+    process.kill(beforeCrash.server.pid, "SIGKILL");
+  } catch {
+    spawnSync("taskkill", ["/F", "/T", "/PID", String(beforeCrash.server.pid)], { windowsHide: true });
+  }
+  const revived = await waitState(
+    (state) => state.server.running && state.server.version && state.server.pid !== beforeCrash.server.pid,
+    90000,
+  );
+  check(
+    "сторож поднимает упавший сервер",
+    revived?.server?.running === true && revived.server.pid !== beforeCrash.server.pid,
+    `pid ${beforeCrash.server.pid} → ${revived?.server?.pid ?? "?"}, попыток: ${revived?.server?.restarts?.attempts ?? "?"}`,
+  );
+  check("URL в менеджере после падения прежний", revived?.mcp?.url === beforeCrash.mcp.url, String(revived?.mcp?.url));
+
   // ── 5. остановка ─────────────────────────────────────────────────────────
   const stopped = await api("/rlm/stop", { method: "POST" });
   check("POST /rlm/stop гасит сервер", stopped.data?.server?.running === false && stopped.data.server.lastError === null);
