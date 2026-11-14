@@ -6,11 +6,11 @@
 | Поле | Значение |
 | --- | --- |
 | Проект | https://github.com/Regsorm/bsl-context |
-| Релиз | `v0.23.1` (23.10.2026) |
+| Релиз | `v0.24.1` (09.11.2026) |
 | Ассет | `bsl-context-windows-x64.zip` |
-| sha256 ассета | `147c2c30f8fe1406ddbee274e08aa292e730979f7dc9dafa5228c38bb9e48477` |
-| sha256 `bsl-context-rs.exe` | `0581cc59b5a5bfce9b34e3c49a000146c746f4c00619e7b38298bbe684937a0d` |
-| Размер `bsl-context-rs.exe` | 15 386 112 байт |
+| sha256 ассета | `1986343d89af0cd1e09378982a5fcfef027d299d5571c9fa82ea61f15d4415d6` |
+| sha256 `bsl-context-rs.exe` | `2a4f557736c9855ab8ba88337da20555b6c3f5eb6d2df4c40ecb0738fcf27500` |
+| Размер `bsl-context-rs.exe` | 15 587 328 байт |
 | Лицензия | MIT (см. `LICENSE`), часть кода портирована из `alkoleft/mcp-bsl-platform-context` (MIT) |
 
 Обновление: заменить `bsl-context-rs.exe` (и `LICENSE` / `README_RU.md` /
