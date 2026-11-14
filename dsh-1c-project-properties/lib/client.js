@@ -329,8 +329,12 @@ window.__ModuleLoader__.load({
   box-shadow: var(--dsw-shadow-lv3, 0 0 1px rgba(0,0,0,.2), 0 12px 32px rgba(0,0,0,.16));
   animation: p1c-toast-in .16s ease-out;
 }
-/* Галочка успеха: та же отметка, что у тостов приложения. */
-.p1c-toast__icon { display: inline-flex; align-items: center; font-size: 15px; line-height: 1; }
+/* Галочка успеха: та же отметка, что у тостов приложения — зелёная галочка в круге. */
+.p1c-toast__icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; flex: none;
+  color: var(--dsw-alias-state-success-primary, #0f9d6e);
+}
 .p1c-toast--leaving .p1c-toast__pill { animation: p1c-toast-out .2s ease-in forwards; }
 @keyframes p1c-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes p1c-toast-out { to { opacity: 0; transform: translateY(4px); } }
@@ -1198,6 +1202,36 @@ window.__ModuleLoader__.load({
     // подтверждающих окон, строка об этом говорит прямо.
     // Плашка поверх окна: те же форма, цвет и время жизни, что у подсказок
     // редактора, чтобы подтверждения в приложении выглядели одинаково.
+    /**
+     * Отметка успеха: галочка в круге, как у тостов приложения (`IconCheckCircleOutline`).
+     * Собирается через createElementNS: галочка из строки в плашку не попадает.
+     * @returns {SVGElement} готовая иконка 16×16.
+     */
+    function toastCheckMark() {
+      const NS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(NS, "svg");
+      svg.setAttribute("viewBox", "0 0 20 20");
+      svg.setAttribute("width", "16");
+      svg.setAttribute("height", "16");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("aria-hidden", "true");
+      const circle = document.createElementNS(NS, "circle");
+      circle.setAttribute("cx", "10");
+      circle.setAttribute("cy", "10");
+      circle.setAttribute("r", "8");
+      circle.setAttribute("stroke", "currentColor");
+      circle.setAttribute("stroke-width", "1.6");
+      const tick = document.createElementNS(NS, "path");
+      tick.setAttribute("d", "M6.3 10.4l2.3 2.3 5-5.2");
+      tick.setAttribute("stroke", "currentColor");
+      tick.setAttribute("stroke-width", "1.8");
+      tick.setAttribute("stroke-linecap", "round");
+      tick.setAttribute("stroke-linejoin", "round");
+      svg.appendChild(circle);
+      svg.appendChild(tick);
+      return svg;
+    }
+
     let toastTimer = null;
     /**
      * Плашка подтверждения поверх окна.
@@ -1221,7 +1255,7 @@ window.__ModuleLoader__.load({
       if (options && options.ok) {
         const icon = document.createElement("span");
         icon.className = "p1c-toast__icon";
-        icon.textContent = "✓";
+        icon.appendChild(toastCheckMark());
         pill.appendChild(icon);
       }
       const text = document.createElement("span");
@@ -2172,6 +2206,13 @@ window.__ModuleLoader__.load({
                 title: "Только изменения, которые видит git: секунды. Состав файлов на диске обновление не сверяет.",
                 onClick: () => run("update"),
                 children: "Обновить",
+              }) : status !== "missing" ? jsx(Btn, {
+                // Полная сборка нужна и без расхождения состава: смена схемы индекса,
+                // переезд движка, подозрение на битый индекс.
+                disabled: !canRun,
+                title: "Полная сборка с нуля: обходит папки и сверяет все файлы .bsl. Несколько минут.",
+                onClick: () => run("build"),
+                children: "Пересобрать",
               }) : null],
             }),
             jsx("div", {
