@@ -3645,6 +3645,9 @@ window.__ModuleLoader__.load({
         try {
           const result = await action();
           setStatus({ kind: "ok", text: message });
+          // Плашка поверх окна: строка статуса уезжает вверх вместе со списком,
+          // и без неё сохранение выглядит как «ничего не произошло».
+          showToast(message);
           return result;
         } catch (error) {
           setStatus({ kind: "error", text: String((error && error.message) || error) });

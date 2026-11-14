@@ -39,17 +39,12 @@ const PARAMS_DIR = ".dsh";
 const PARAMS_FILE = "1c-project.json";
 const PARAMS_REL = PARAMS_DIR + "/" + PARAMS_FILE;
 
-// Порядок ключей в файле проекта (и полный список поддерживаемых полей).
-const PARAM_KEYS = [
-  "infobasePath",
-  "user",
-  "password",
-  "platformPath",
-  "unlockCode",
-  "dumpDir",
-  "checksEnabled",
-  "checksPreset",
-];
+// Поля подключения к базе: в файле проекта это строки, и только они приходят из
+// формы «Параметры проекта». Ключи проверок кода (checksEnabled — логическое,
+// checksPreset — имя набора) и индекса rlm ведут свои модули: у них другой тип,
+// и запись их как строк превращала включённый анализ в "" при каждом сохранении
+// карточки проекта.
+const PARAM_KEYS = ["infobasePath", "user", "password", "platformPath", "unlockCode", "dumpDir"];
 
 // $DSH_HOME: та же приоритетность, что у ядра — переменная окружения, иначе ~/.dsh.
 const DSH_HOME = (() => {
@@ -157,14 +152,18 @@ function readParams(projectPath) {
   return { file, hasFile: raw !== null, params };
 }
 
-// Сохраняет только известные поля; чужие ключи в файле не теряются.
+// Сохраняет только поля формы; чужие ключи (проверки кода, индекс rlm) в файле
+// не теряются и не меняют тип. Значение из формы сильнее файла только когда оно
+// действительно строка: пустая строка в форме — это «поле не задано».
 function saveParams(projectPath, patch) {
   const file = paramsFile(projectPath);
   const current = readJson(file) ?? {};
   const next = { $schema: SCHEMA };
   for (const key of PARAM_KEYS) {
     const value = patch?.[key];
-    next[key] = typeof value === "string" ? value : typeof current[key] === "string" ? current[key] : "";
+    if (typeof value === "string") next[key] = value;
+    else if (key in current) next[key] = current[key];
+    else next[key] = "";
   }
   for (const [key, value] of Object.entries(current)) {
     if (!(key in next)) next[key] = value;
