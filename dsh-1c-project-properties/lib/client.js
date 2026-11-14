@@ -321,7 +321,7 @@ window.__ModuleLoader__.load({
   max-width: min(640px, calc(100vw - 48px)); pointer-events: none;
 }
 .p1c-toast__pill {
-  display: inline-flex; align-items: center; padding: 12px 16px;
+  display: inline-flex; align-items: center; gap: 6px; padding: 12px 16px;
   border-radius: var(--dsw-radius-lg, 16px);
   background: var(--dsw-alias-toast-bg, #353638);
   color: var(--dsw-alias-toast-label, #fff);
@@ -329,6 +329,8 @@ window.__ModuleLoader__.load({
   box-shadow: var(--dsw-shadow-lv3, 0 0 1px rgba(0,0,0,.2), 0 12px 32px rgba(0,0,0,.16));
   animation: p1c-toast-in .16s ease-out;
 }
+/* Галочка успеха: та же отметка, что у тостов приложения. */
+.p1c-toast__icon { display: inline-flex; align-items: center; font-size: 15px; line-height: 1; }
 .p1c-toast--leaving .p1c-toast__pill { animation: p1c-toast-out .2s ease-in forwards; }
 @keyframes p1c-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes p1c-toast-out { to { opacity: 0; transform: translateY(4px); } }
@@ -759,11 +761,6 @@ window.__ModuleLoader__.load({
             className: "p1c-card",
             children: [
               jsx("div", { className: "p1c-card__title", children: "1С:Напарник" }),
-              jsx("div", {
-                className: "p1c-note",
-                children:
-                  "Стандарты ИТС, БСП и методички — инструментом its_help.",
-              }),
               jsxs("div", {
                 className: "p1c-row",
                 children: [
@@ -1202,18 +1199,34 @@ window.__ModuleLoader__.load({
     // Плашка поверх окна: те же форма, цвет и время жизни, что у подсказок
     // редактора, чтобы подтверждения в приложении выглядели одинаково.
     let toastTimer = null;
-    function showToast(message) {
+    /**
+     * Плашка подтверждения поверх окна.
+     * @param {string} message - текст плашки.
+     * @param {{ok?: boolean}} [options] - `ok` добавляет галочку успеха.
+     */
+    function showToast(message, options) {
       let host = document.querySelector(".p1c-toast");
       if (!host) {
         host = document.createElement("div");
         host.className = "p1c-toast";
-        const pill = document.createElement("div");
-        pill.className = "p1c-toast__pill";
-        host.appendChild(pill);
         document.body.appendChild(host);
       }
-      const pill = host.firstChild;
-      if (pill) pill.textContent = String(message);
+      let pill = host.firstChild;
+      if (!pill) {
+        pill = document.createElement("div");
+        pill.className = "p1c-toast__pill";
+        host.appendChild(pill);
+      }
+      pill.textContent = "";
+      if (options && options.ok) {
+        const icon = document.createElement("span");
+        icon.className = "p1c-toast__icon";
+        icon.textContent = "✓";
+        pill.appendChild(icon);
+      }
+      const text = document.createElement("span");
+      text.textContent = String(message);
+      pill.appendChild(text);
       host.classList.remove("p1c-toast--leaving");
       if (toastTimer) clearTimeout(toastTimer);
       toastTimer = setTimeout(() => {
@@ -2028,6 +2041,18 @@ window.__ModuleLoader__.load({
                   children: [
                     jsx(Row, { label: "Размер", value: index.size }),
                     jsx(Row, { label: "Собрано", value: index.built || "неизвестно" }),
+                  ],
+                })
+              : null,
+            // Возраст посчитан от прежней сборки, а сверку выполнил плагин: без этой строки
+            // «Собрано: 9.0d ago» рядом со статусом «актуален» выглядит противоречием.
+            index && index.buildMarkStale
+              ? jsxs("div", {
+                  className: "p1c-note",
+                  children: [
+                    "Сверено с исходниками при последнем обновлении: ",
+                    whenText(index.verifiedAt),
+                    ". Метку сборки внутри индекса движок не сдвинул — так он вёл себя до 1.46, если файлы .bsl не менялись.",
                   ],
                 })
               : null,
@@ -3647,7 +3672,7 @@ window.__ModuleLoader__.load({
           setStatus({ kind: "ok", text: message });
           // Плашка поверх окна: строка статуса уезжает вверх вместе со списком,
           // и без неё сохранение выглядит как «ничего не произошло».
-          showToast(message);
+          showToast(message, { ok: true });
           return result;
         } catch (error) {
           setStatus({ kind: "error", text: String((error && error.message) || error) });
@@ -3685,7 +3710,7 @@ window.__ModuleLoader__.load({
         run(async () => {
           await request("/project-save", { method: "POST", body: JSON.stringify({ path: project.path, params: form }) });
           await load();
-        }, "Параметры проекта сохранены");
+        }, "Готово");
       };
 
       const clearProject = () => {
@@ -3911,6 +3936,7 @@ window.__ModuleLoader__.load({
           info.url
             ? "Адрес: " + info.url + (info.managerRegistered ? " — отдан MCP-менеджеру." : " — менеджеру не отдан.")
             : "",
+          info.managerError ? "Менеджер: " + info.managerError + "." : "",
           info.version ? "Версия сервера: " + info.version + "." : "",
         ].filter(Boolean).join(" ");
         return jsx(Card, {

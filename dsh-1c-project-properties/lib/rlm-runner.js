@@ -1019,19 +1019,23 @@ let indexCommandCache = null;
 function detectIndexCommand() {
   const now = Date.now();
   if (indexCommandCache && now - indexCommandCache.at < 15000) return indexCommandCache.value;
-  const probe = process.platform === "win32" ? "where" : "which";
-  const found = spawnSync(probe, ["rlm-bsl-index"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+  // Порядок важен: сначала то, что положил установщик каталога, потом пользовательский
+  // ~/.local/bin, и только затем PATH. В PATH может стоять чужая сборка CLI старше 1.46:
+  // её `index update` не сдвигает метку сборки, и карточка навсегда остаётся «устарел
+  // по возрасту» при формально успешном обновлении.
   let value = "";
-  if (found.status === 0) {
-    value = String(found.stdout ?? "").split("\n").map((line) => line.trim()).filter(Boolean)[0] || "";
+  for (const dir of [TOOL_BIN_DIR, join(homedir(), ".local", "bin")]) {
+    const candidate = join(dir, INDEX_COMMAND);
+    if (existsSync(candidate)) {
+      value = candidate;
+      break;
+    }
   }
   if (!value) {
-    for (const dir of [join(homedir(), ".local", "bin"), TOOL_BIN_DIR]) {
-      const candidate = join(dir, INDEX_COMMAND);
-      if (existsSync(candidate)) {
-        value = candidate;
-        break;
-      }
+    const probe = process.platform === "win32" ? "where" : "which";
+    const found = spawnSync(probe, ["rlm-bsl-index"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+    if (found.status === 0) {
+      value = String(found.stdout ?? "").split("\n").map((line) => line.trim()).filter(Boolean)[0] || "";
     }
   }
   indexCommandCache = { at: now, value };
@@ -1161,6 +1165,47 @@ function normalizeIndexStatus(statusText) {
   if (/stale/i.test(statusText) && /structure/i.test(statusText)) return "stale_structure";
   if (/stale/i.test(statusText) && /age/i.test(statusText)) return "stale_age";
   return "unknown";
+}
+
+// Возраст из строки «Built:» движка («34s ago», «35m ago», «5.0h ago», «9.0d ago») в миллисекундах.
+// Нужен, чтобы сверить метку сборки движка со своей меткой сверки, не открывая его SQLite.
+export function parseBuiltAge(text) {
+  const match = String(text ?? "").trim().match(/^(\d+(?:[.,]\d+)?)\s*([smhd])s?\b/i);
+  if (!match) return null;
+  const value = Number(match[1].replace(",", "."));
+  if (!Number.isFinite(value)) return null;
+  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2].toLowerCase()];
+  return unit ? value * unit : null;
+}
+
+// Движок до 1.46 не сдвигал метку сборки (built_at), если «index update» не нашёл изменённых
+// .bsl: обновление завершалось успешно, а проверка свежести продолжала отвечать «stale (age)»,
+// потому что возраст считался от прежней сборки, — и кнопка «Обновить» не снимала признак.
+// Своя метка последней успешной сверки (lastIndexAt) тоже означает сверку с исходниками, поэтому
+// возраст берётся по более свежей из двух меток, а предел — тот же, что у движка
+// (RLM_INDEX_MAX_AGE_DAYS, по умолчанию 7 суток). Если новее оказалась своя метка, статус
+// показываем актуальным и помечаем, что метку движок не сдвинул.
+export function applyOwnVerification(info, lastIndexAt, options = {}) {
+  const now = options.now ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? 7 * 86_400_000;
+  if (!info || info.status !== "stale_age" || !lastIndexAt) return info;
+  const verifiedAt = Date.parse(lastIndexAt);
+  const builtAgeMs = parseBuiltAge(info.built);
+  if (!Number.isFinite(verifiedAt) || builtAgeMs === null) return info;
+  const verifiedAgeMs = now - verifiedAt;
+  // Своя сверка не новее сборки движка — возраст честный, поправлять нечего.
+  if (!(verifiedAgeMs < builtAgeMs)) return info;
+  // Своя метка новее, но сама уже за пределом: возраст не спорный, статус оставляем.
+  if (verifiedAgeMs > maxAgeMs) return info;
+  return { ...info, status: "fresh", verifiedAt, buildMarkStale: true };
+}
+
+// Предельный возраст индекса живёт в окружении движка; своя метка сверки мерится тем же пределом,
+// иначе «актуален» врал бы в другую сторону. Значение по умолчанию — как у движка.
+function indexMaxAgeMs(rt) {
+  const env = { ...process.env, ...effectiveConfig(rt).config.env };
+  const days = Number(env.RLM_INDEX_MAX_AGE_DAYS);
+  return (Number.isFinite(days) && days >= 0 ? days : 7) * 86_400_000;
 }
 
 function runIndexInfo(cli, key, env, timeoutMs = INDEX_INFO_TIMEOUT_MS) {
@@ -1551,6 +1596,9 @@ async function indexState(rt, rawPath, options = {}) {
       void probeIndexInfo(rt, path, target);
     }
   }
+  // Вердикт движка сверяем со своей меткой последней успешной сверки: возраст, посчитанный от
+  // прежней сборки, не повод показывать «устарел по возрасту» (см. applyOwnVerification).
+  if (index) index = applyOwnVerification(index, entry && entry.lastIndexAt, { maxAgeMs: indexMaxAgeMs(rt) });
   return {
     ok: true,
     bin,
@@ -1606,6 +1654,9 @@ async function autoIndexPass(rt, reason) {
       continue;
     }
     if (!info || (!info.ok && info.status !== "missing")) continue;
+    // Та же сверка со своей меткой, что в карточке: иначе плановый проход гонял бы update
+    // каждый час на индексе, чью метку сборки движок не сдвинул.
+    info = applyOwnVerification(info, entry.lastIndexAt, { maxAgeMs: indexMaxAgeMs(rt) });
     const missing = info.status === "missing";
     if (missing && reason === "tick") continue;
     try {

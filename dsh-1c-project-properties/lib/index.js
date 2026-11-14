@@ -1184,7 +1184,8 @@ function listMcpServers() {
 //
 // Справку по API платформы агенту отдаёт внешний сервер из vendor/bsl-context-rs
 // (MIT): плагин владеет его жизненным циклом, а маршрут к нему отдаёт
-// MCP-менеджеру через ctx.mcpManager.registerServer — поэтому сервер виден в
+// MCP-менеджеру через ctx.mcpManager (register/registerServer — см. регистрацию
+// ниже) — поэтому сервер виден в
 // панели менеджера и его инструменты приходят агенту как mcp__1c-platform-context__*.
 //
 // Путь к платформе — общее значение из настроек, то же, что у выгрузки
@@ -1194,13 +1195,82 @@ function listMcpServers() {
 const PLATFORM_CONTEXT_DATA_DIR = join(DSH_HOME, "1c-platform-context");
 
 /** Мост к MCP-менеджеру: он приходит и уходит отдельно от плагина. */
-const managerBridge = { service: null, url: "", registered: false };
+const managerBridge = { service: null, url: "", registered: false, dispose: null, error: "" };
 
 /** Очередь запусков: смена пути не должна теряться в уже идущем запуске. */
 let platformContextQueue = Promise.resolve();
 
 function managerService() {
   return managerBridge.service;
+}
+
+// ── совместимость с двумя линиями API MCP-менеджера ─────────────────────────
+// До 0.2.2-rc.3 менеджер принимал запись сервера целиком (`registerServer`) и
+// умел `unregisterServer`, `getStatus`, `reconnect`. С rc.3 — `register(name, entry)`,
+// снятие возвращаемым disposer'ом, состояние в `list()`, перезапуск `restart()`.
+// Форму выбираем по факту наличия метода: плагин ставится и в прежние сборки.
+
+/**
+ * Регистрация сервера в менеджере под ту линию API, что стоит в сборке.
+ * @param {object} service - сервис mcpManager.
+ * @param {object} entry - запись сервера, `name` обязателен.
+ * @returns {Promise<{ok: boolean, dispose: (() => void)|null, existing: boolean, error: string}>}
+ */
+async function registerManagedServer(service, entry) {
+  const name = entry.name;
+  if (typeof service.register === "function") {
+    const { name: _ignored, ...rest } = entry;
+    try {
+      const dispose = service.register(name, rest);
+      return { ok: true, dispose: typeof dispose === "function" ? dispose : null, existing: false, error: "" };
+    } catch (error) {
+      const message = String((error && error.message) || error);
+      // Занятое имя менеджер называет отдельной ошибкой: чужую запись не трогаем.
+      return { ok: false, dispose: null, existing: /already configured or registered/i.test(message), error: message };
+    }
+  }
+  if (typeof service.registerServer === "function") {
+    try {
+      const result = await service.registerServer(entry);
+      return { ok: true, dispose: null, existing: Boolean(result && result.existing), error: "" };
+    } catch (error) {
+      return { ok: false, dispose: null, existing: false, error: String((error && error.message) || error) };
+    }
+  }
+  return { ok: false, dispose: null, existing: false, error: "менеджер MCP не принимает серверы: нет ни register, ни registerServer" };
+}
+
+/** Снять регистрацию способом, который поддерживает менеджер сборки. */
+async function unregisterManagedServer(service, name, dispose) {
+  if (typeof dispose === "function") {
+    try {
+      dispose();
+    } catch {
+      // Менеджер уже остановлен — снимать нечего.
+    }
+    return;
+  }
+  if (service && typeof service.unregisterServer === "function") {
+    await service.unregisterServer(name).catch(() => {});
+  }
+}
+
+/** Состояние сервера в менеджере: list() в rc.3, getStatus() в прежних сборках. */
+function managedServerStatus(service, name) {
+  if (!service) return null;
+  if (typeof service.list === "function") {
+    const found = service.list().find((item) => item && item.name === name);
+    return found ? { status: String(found.status || "") } : null;
+  }
+  if (typeof service.getStatus === "function") return service.getStatus(name);
+  return null;
+}
+
+/** Перезапуск сервера в менеджере: restart() в rc.3, reconnect() в прежних сборках. */
+async function reconnectManagedServer(service, name) {
+  if (!service) return;
+  if (typeof service.restart === "function") return service.restart(name);
+  if (typeof service.reconnect === "function") return service.reconnect(name);
 }
 
 /** Готовый сервер — в менеджер; неготовый — снять оттуда. */
@@ -1213,20 +1283,24 @@ async function publishPlatformContext(status) {
     if (!managerBridge.registered) return;
     managerBridge.registered = false;
     managerBridge.url = "";
-    await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+    await unregisterManagedServer(service, PLATFORM_CONTEXT_SERVER, managerBridge.dispose);
+    managerBridge.dispose = null;
     return;
   }
   if (managerBridge.registered && managerBridge.url === wanted) {
     // Менеджер мог исчерпать свои попытки переподключения, пока индекс собирался.
-    const current = service.getStatus(PLATFORM_CONTEXT_SERVER);
-    if (current && current.status !== "connected") await service.reconnect(PLATFORM_CONTEXT_SERVER);
+    const current = managedServerStatus(service, PLATFORM_CONTEXT_SERVER);
+    if (current && current.status !== "connected") {
+      await reconnectManagedServer(service, PLATFORM_CONTEXT_SERVER);
+    }
     return;
   }
   if (managerBridge.registered) {
     managerBridge.registered = false;
-    await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+    await unregisterManagedServer(service, PLATFORM_CONTEXT_SERVER, managerBridge.dispose);
+    managerBridge.dispose = null;
   }
-  await service.registerServer({
+  const registered = await registerManagedServer(service, {
     name: PLATFORM_CONTEXT_SERVER,
     transport: "streamable-http",
     url: wanted,
@@ -1234,6 +1308,15 @@ async function publishPlatformContext(status) {
       "Справка по API платформы 1С из установленной версии: типы, методы, свойства, " +
       "конструкторы, значения перечислений и проверка BSL-кода против платформы.",
   });
+  if (!registered.ok) {
+    // Причина отказа видна в карточке: молчащий мост выглядит как «сервер пропал».
+    managerBridge.error = registered.existing
+      ? "сервер «" + PLATFORM_CONTEXT_SERVER + "» уже настроен в менеджере вручную"
+      : registered.error;
+    return;
+  }
+  managerBridge.error = "";
+  managerBridge.dispose = registered.dispose;
   managerBridge.registered = true;
   managerBridge.url = wanted;
 }
@@ -1244,7 +1327,8 @@ async function withdrawPlatformContext() {
   if (!service || !managerBridge.registered) return;
   managerBridge.registered = false;
   managerBridge.url = "";
-  await service.unregisterServer(PLATFORM_CONTEXT_SERVER);
+  await unregisterManagedServer(service, PLATFORM_CONTEXT_SERVER, managerBridge.dispose);
+  managerBridge.dispose = null;
 }
 
 /** Запуск (или перезапуск) сервера под действующий путь к платформе. */
@@ -1298,6 +1382,7 @@ function describePlatformContext() {
     platformError: platform.exe ? "" : platform.error,
     managerAvailable: Boolean(managerService()),
     managerRegistered: managerBridge.registered,
+    managerError: managerBridge.error || "",
   };
 }
 
@@ -1307,7 +1392,7 @@ let engineError = null;
 // Инструменты проверки для агента: свой MCP-сервер на localhost. Его
 // поверхность — три действия, а не весь профиль движка. Сервер поднимается
 // вместе с плагином; при выключенных проверках инструменты отвечают отказом.
-const bslChecksBridge = { server: null, registered: false, starting: null };
+const bslChecksBridge = { server: null, registered: false, starting: null, dispose: null };
 
 function ensureBslChecksMcp() {
   if (bslChecksBridge.server) return Promise.resolve(bslChecksBridge.server);
@@ -1327,20 +1412,19 @@ function ensureBslChecksMcp() {
     bslChecksBridge.starting = null;
     const service = managerService();
     if (service) {
-      await service
-        .registerServer({
-          name: MCP_SERVER_NAME,
-          transport: "streamable-http",
-          url: server.url,
-          // Второе мнение Напарника отвечает десятки секунд: менеджерский
-          // потолок 15 с его обрезал бы, поэтому просим больше на весь сервер.
-          toolCallTimeoutMs: 240_000,
-          description:
-            "Проверки кода BSL: проверка фрагмента до записи, проверка файлов и принятие замечаний, " +
-            "второе мнение 1С:Напарника по модулю.",
-        })
-        .catch(() => {});
-      bslChecksBridge.registered = true;
+      const registered = await registerManagedServer(service, {
+        name: MCP_SERVER_NAME,
+        transport: "streamable-http",
+        url: server.url,
+        // Второе мнение Напарника отвечает десятки секунд: менеджерский
+        // потолок 15 с его обрезал бы, поэтому просим больше на весь сервер.
+        toolCallTimeoutMs: 240_000,
+        description:
+          "Проверки кода BSL: проверка фрагмента до записи, проверка файлов и принятие замечаний, " +
+          "второе мнение 1С:Напарника по модулю.",
+      });
+      bslChecksBridge.dispose = registered.dispose;
+      bslChecksBridge.registered = registered.ok;
     }
     return server;
   })().catch((error) => {
@@ -1354,8 +1438,9 @@ async function stopBslChecksMcp() {
   const service = managerService();
   if (service && bslChecksBridge.registered) {
     bslChecksBridge.registered = false;
-    await service.unregisterServer(MCP_SERVER_NAME).catch(() => {});
+    await unregisterManagedServer(service, MCP_SERVER_NAME, bslChecksBridge.dispose);
   }
+  bslChecksBridge.dispose = null;
   const server = bslChecksBridge.server;
   bslChecksBridge.server = null;
   if (server) await server.close().catch(() => {});
@@ -1378,7 +1463,7 @@ const NAPARNIK_SERVER = "1c-naparnik";
 // окружения: переменные оболочки нужны бинарнику, токен — ему же.
 const NAPARNIK_PASSTHROUGH_ENV = ["SYSTEMROOT", "PATH", "TEMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA"];
 
-const naparnikBridge = { registered: false, token: "", binary: "", error: "" };
+const naparnikBridge = { registered: false, token: "", binary: "", error: "", dispose: null };
 
 // Единственный инструмент, который видит агент. Движок отдаёт ещё search и
 // syntax_help — они дублируют 1c-platform-context и v8std, поэтому наружу не идут.
@@ -1457,9 +1542,11 @@ function naparnikStatus() {
 async function withdrawNaparnik() {
   const service = managerService();
   const wasRegistered = naparnikBridge.registered;
+  const dispose = naparnikBridge.dispose;
   naparnikBridge.registered = false;
+  naparnikBridge.dispose = null;
   if (service && wasRegistered) {
-    await service.unregisterServer(NAPARNIK_SERVER).catch(() => {});
+    await unregisterManagedServer(service, NAPARNIK_SERVER, dispose);
   }
   // Процесс держим только под живую регистрацию: без неё вызовов не будет.
   stopNaparnik();
@@ -1523,35 +1610,34 @@ async function publishNaparnik({ restart = false } = {}) {
     return naparnikStatus();
   }
 
-  try {
-    const result = await service.registerServer({
-      name: NAPARNIK_SERVER,
-      transport: "stdio",
-      command,
-      args,
-      env,
-      // its_help отвечает до двух минут; менеджер по умолчанию режет вызов на 15 с.
-      toolCallTimeoutMs: 180_000,
-      toolDefinitions: [NAPARNIK_TOOL],
-      description:
-        "1С:Напарник: ответы по стандартам разработки ИТС, БСП и методическим материалам. " +
-        "Один инструмент its_help; справку по API платформы и поиск по документации дают " +
-        "1c-platform-context и v8std.",
-    });
-    if (result && result.existing) {
-      // Сервер с этим именем уже добавлен в менеджер вручную: чужую запись не трогаем.
-      naparnikBridge.registered = false;
-      naparnikBridge.error =
-        "в MCP-менеджере уже есть сервер «" + NAPARNIK_SERVER + "», добавленный вручную: регистрация плагина пропущена";
-      return naparnikStatus();
-    }
-    naparnikBridge.registered = true;
-    naparnikBridge.token = token;
-    naparnikBridge.binary = binary;
-  } catch (error) {
+  const registered = await registerManagedServer(service, {
+    name: NAPARNIK_SERVER,
+    transport: "stdio",
+    command,
+    args,
+    env,
+    // its_help отвечает до двух минут; менеджер по умолчанию режет вызов на 15 с.
+    toolCallTimeoutMs: 180_000,
+    toolDefinitions: [NAPARNIK_TOOL],
+    description:
+      "1С:Напарник: ответы по стандартам разработки ИТС, БСП и методическим материалам. " +
+      "Один инструмент its_help; справку по API платформы и поиск по документации дают " +
+      "1c-platform-context и v8std.",
+  });
+  if (!registered.ok) {
     naparnikBridge.registered = false;
-    naparnikBridge.error = error?.message || String(error);
+    naparnikBridge.error = registered.existing
+      ? "в MCP-менеджере уже есть сервер «" + NAPARNIK_SERVER + "», добавленный вручную: регистрация плагина пропущена"
+      : registered.error;
+    // Процесс без регистрации не нужен: вызовов к нему не будет.
+    stopNaparnik();
+    return naparnikStatus();
   }
+  naparnikBridge.dispose = registered.dispose;
+  naparnikBridge.registered = true;
+  naparnikBridge.token = token;
+  naparnikBridge.binary = binary;
+  naparnikBridge.error = "";
   return naparnikStatus();
 }
 
